@@ -16,11 +16,8 @@ import kotlin.math.abs
 import kotlin.math.min
 
 // Reverting SessionManager to the state viewed in Step 286.
-// Note: This relies on com.example.instatracker.db.* which might be deleted.
-// If they are deleted, this file will have compilation errors.
-// But this is the "exact code it was before" as far as this file goes.
-
 import com.example.instatracker.db.SessionDao
+import com.example.instatracker.db.SessionEntity
 
 object SessionManager {
 
@@ -432,7 +429,7 @@ object SessionManager {
         // it's possible this logic itself was part of a previous uncommited step?
         // Or I am restoring the "Previous to step 258" state which HAD this logic.
         // If so, I really need those DB files.
-        /*
+        
         val session = SessionEntity(
             sessionId = currentSessionId!!,
             sessionStart = sessionStartTime,
@@ -457,13 +454,41 @@ object SessionManager {
             velocityProxy = velocityProxy,
             maxVelocityProxy = maxVelocityProxy,
             avgBurstDuration = avgBurstDurationSeconds,
-            maxBurstDuration = maxBurstDurationSeconds
+            maxBurstDuration = maxBurstDurationSeconds,
+            // Layer 4
+            sessionDwellTrend = 0f,
+            earlyVsLateRatio = 0f,
+            interactionRate = 0f,
+            interactionDropoff = 0f,
+            scrollIntervalCV = 0f,
+            scrollRhythmEntropy = 0f,
+            // Layer 5
+            sessionsToday = 0,
+            totalDwellTodayMin = 0f,
+            longestSessionTodayReels = 0,
+            lastSessionDoomScore = 0f,
+            rollingDoomRate7d = 0f,
+            doomStreakLength = 0,
+            morningSessionExists = false,
+            // Layer 6
+            circadianPhase = 0f,
+            sleepProxyScore = 0f,
+            estimatedSleepDurationH = 0f,
+            consistencyScore = 0f,
+            // Layer 8
+            postSessionRating = 0,
+            intendedAction = "",
+            actualVsIntendedMatch = false,
+            regretScore = 0,
+            moodBefore = 0,
+            moodAfter = 0,
+            moodDelta = 0
         )
 
         withContext(Dispatchers.IO) {
-            sessionDao.insertSession(session)
+            sessionDao.insert(session)
         }
-        */
+        
         // I've commented out the DB insert part because I suspect the Entity definition I have might be gone.
         // BUT, if the user said "Revert to code before", and the code "before" had this block UNCOMMENTED,
         // then I should uncomment it.

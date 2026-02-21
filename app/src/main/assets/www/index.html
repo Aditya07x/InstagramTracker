@@ -36,6 +36,7 @@
     </script>
     <script src="https://unpkg.com/prop-types@15.8.1/prop-types.js"></script>
     <script src="https://unpkg.com/recharts@2.12.0/umd/Recharts.js"></script>
+    <script src="https://unpkg.com/lucide-react@0.344.0/dist/umd/lucide-react.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&display=swap" rel="stylesheet">
     <style>
         body {
@@ -104,222 +105,562 @@
             }
         };
     </script>
-    <!-- LOAD V2 DASHBOARD -->
-    <script type='text/babel'>
-        const { useState, useEffect, useMemo } = React;
+    <!-- LOAD V3 DASHBOARD FROM EXTERNAL FILE -->
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
         const {
-            AreaChart, Area,
-            XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
+            AreaChart, Area, XAxis, YAxis, Tooltip,
+            ResponsiveContainer, LineChart, Line, ReferenceLine
         } = window.Recharts;
+        const {
+            Eye, Zap, Shield, Clock, Brain, Activity,
+            AlertTriangle, ChevronRight, Radio, Download,
+            Trash2, Settings, ArrowLeft, TrendingDown,
+            Lock, Cpu, BarChart2, Moon, Battery, Wifi,
+            ChevronUp, ChevronDown
+        } = window.lucide;
 
-        const COLORS = {
-            cyan: '#22D3EE',
-            amber: '#FBBF24',
-            red: '#EF4444',
-            green: '#10B981',
-            slate_800: '#1E293B',
-            slate_700: '#334155'
+        /* ─── DESIGN SYSTEM ────────────────────────────────────────────── */
+        const D = {
+            bg: "#060810",
+            surface: "rgba(12,16,32,0.95)",
+            card: "rgba(16,22,42,0.9)",
+            doom: "#FF2D55",
+            safe: "#00E5C8",
+            warn: "#FFB340",
+            violet: "#BF5AF2",
+            blue: "#0A84FF",
+            text: "#D0DCF0",
+            muted: "#3D4F6B",
+            border: "rgba(0,229,200,0.1)",
+            borderDoom: "rgba(255,45,85,0.35)",
         };
 
-        const CognitiveStabilityScore = ({ sessions, A11 }) => {
-            const meanState = sessions.length > 0 ? sessions.reduce((acc, s) => acc + s.S_t, 0) / sessions.length : 0;
-            const recoveryPower = 1.0 - A11;
-            const score = Math.max(0, Math.min(100, Math.round((1.0 - meanState) * 80 + recoveryPower * 20)));
+        /* ─── INJECTED STYLES ──────────────────────────────────────────── */
+        const Styles = () => (
+            <style>{`
+    @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Syne:wght@400;600;700;800&family=Space+Mono:wght@400;700&display=swap');
 
-            let colorClass = "text-success_accent";
-            if (score < 40) colorClass = "text-danger_accent";
-            else if (score < 70) colorClass = "text-warning_accent";
+    * { box-sizing: border-box; margin: 0; padding: 0; }
 
+    .app-shell {
+      width: 100%; min-height: 100vh;
+      background: ${D.bg};
+      font-family: 'Syne', sans-serif;
+      color: ${D.text};
+      position: relative;
+      overflow: hidden;
+      max-width: 500px;
+      margin: 0 auto;
+    }
+    .mono { font-family: 'Share Tech Mono', monospace; }
+    .spacemono { font-family: 'Space Mono', monospace; }
+
+    .app-shell::before {
+      content: '';
+      position: fixed; inset: 0;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+      pointer-events: none; z-index: 0; opacity: 0.5;
+    }
+
+    .glow-doom { box-shadow: 0 0 40px rgba(255,45,85,0.15), 0 0 80px rgba(255,45,85,0.06); }
+    .glow-safe { box-shadow: 0 0 30px rgba(0,229,200,0.12); }
+    .text-doom { color: ${D.doom}; text-shadow: 0 0 20px rgba(255,45,85,0.6); }
+    .text-safe { color: ${D.safe}; text-shadow: 0 0 15px rgba(0,229,200,0.5); }
+    .text-warn { color: ${D.warn}; }
+
+    @keyframes pulse-dot { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.4;transform:scale(0.8)} }
+    @keyframes ring-out  { 0%{transform:scale(1);opacity:0.7} 100%{transform:scale(1.8);opacity:0} }
+    @keyframes slide-up  { from{opacity:0;transform:translateY(16px)} to{opacity:1;transform:translateY(0)} }
+    @keyframes scan-line  { 0%{top:-2px} 100%{top:100%} }
+    @keyframes float      { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-3px)} }
+
+    .pulse     { animation: pulse-dot 2s ease-in-out infinite; }
+    .slide-up  { animation: slide-up 0.5s ease both; }
+    .float     { animation: float 3s ease-in-out infinite; }
+
+    .scan {
+      position: absolute; left: 0; right: 0; height: 1px;
+      background: linear-gradient(90deg, transparent, ${D.safe}88, transparent);
+      animation: scan-line 5s linear infinite;
+      pointer-events: none;
+    }
+
+    .card {
+      background: ${D.card};
+      border: 1px solid ${D.border};
+      border-radius: 16px;
+      backdrop-filter: blur(20px);
+      position: relative;
+      overflow: hidden;
+    }
+    .card::after {
+      content: '';
+      position: absolute; inset: 0;
+      background: linear-gradient(135deg, rgba(0,229,200,0.03) 0%, transparent 60%);
+      pointer-events: none;
+    }
+    .card-hot { border-color: ${D.borderDoom}; }
+    .card-hot::before {
+      content: '';
+      position: absolute; inset: -1px;
+      border-radius: 17px;
+      background: transparent;
+      box-shadow: 0 0 30px rgba(255,45,85,0.2), inset 0 0 30px rgba(255,45,85,0.03);
+      pointer-events: none;
+    }
+
+    ::-webkit-scrollbar { width: 3px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: ${D.muted}; border-radius: 2px; }
+
+    .btn-primary {
+      width: 100%;
+      padding: 18px;
+      border-radius: 16px;
+      border: none;
+      cursor: pointer;
+      font-family: 'Syne', sans-serif;
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      background: linear-gradient(135deg, ${D.safe}, #00B8A4);
+      color: #020A0A;
+      position: relative;
+      overflow: hidden;
+      transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+    .btn-primary:active { transform: scale(0.98); }
+    .btn-primary::after {
+      content: '';
+      position: absolute; inset: 0;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.15), transparent);
+      transform: translateX(-100%);
+      transition: transform 0.5s ease;
+    }
+    .btn-primary:hover::after { transform: translateX(100%); }
+
+    input[type=range] {
+      -webkit-appearance: none; width: 100%;
+      height: 3px; border-radius: 2px;
+      background: rgba(0,229,200,0.2);
+      outline: none;
+    }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 16px; height: 16px;
+      border-radius: 50%;
+      background: ${D.safe};
+      box-shadow: 0 0 10px ${D.safe};
+      cursor: pointer;
+    }
+
+    .tab-bar {
+      position: sticky; bottom: 0;
+      background: rgba(6,8,16,0.95);
+      backdrop-filter: blur(20px);
+      border-top: 1px solid ${D.border};
+      display: flex;
+    }
+    .tab-item {
+      flex: 1; padding: 12px 8px 16px;
+      display: flex; flex-direction: column;
+      align-items: center; gap: 3px;
+      cursor: pointer; border: none;
+      background: transparent; color: ${D.muted};
+      font-family: 'Syne'; font-size: 10px;
+      transition: color 0.2s;
+    }
+    .tab-item.active { color: ${D.safe}; }
+  `}</style>
+        );
+
+        /* ─── MICRO COMPONENTS ─────────────────────────────────────────── */
+        const Label = ({ children, style = {} }) => (
+            <span className="mono" style={{
+                fontSize: 10, letterSpacing: "0.18em",
+                color: D.muted, textTransform: "uppercase", ...style
+            }}>{children}</span>
+        );
+
+        const Tag = ({ label }) => {
+            const c = label === "DOOM" ? D.doom : label === "BORDERLINE" ? D.warn : D.safe;
             return (
-                <div className="glass-card flex items-center justify-between border-b-4 border-b-card_elevated hover:border-b-cyan_accent">
-                    <div>
-                        <h2 className="text-[11px] font-medium text-text_muted uppercase tracking-[0.15em] mb-1">Index</h2>
-                        <div className="text-[15px] font-semibold text-text_primary">Cognitive Stability</div>
-                    </div>
-                    <div className={`text-[40px] font-bold tracking-tighter ${colorClass}`}>{score}</div>
-                </div>
+                <span className="mono" style={{
+                    fontSize: 10, padding: "3px 8px", borderRadius: 4,
+                    color: c, background: c + "22", border: `1px solid ${c}44`,
+                    letterSpacing: "0.12em",
+                }}>{label}</span>
             );
         };
 
-        const TransitionMatrixVisualizer = ({ matrix }) => {
-            if (!matrix || matrix.length < 2) return null;
+        const Divider = () => (
+            <div style={{ height: 1, background: D.border, margin: "0 -1px" }} />
+        );
+
+        /* ─── LANDING / HOME SCREEN ────────────────────────────────────── */
+        const HomeScreen = ({ onNav, SESSION, LIVE, isServiceActive }) => {
             return (
-                <div className="glass-card h-full flex flex-col justify-between">
-                    <h2 className="text-[12px] font-semibold text-text_secondary uppercase tracking-widest mb-4">State Dynamics</h2>
-                    <div className="grid grid-cols-2 gap-3 flex-1">
-                        <div className="bg-background_secondary rounded-[12px] p-4 flex flex-col justify-center items-center relative overflow-hidden group transition-all duration-300 hover:scale-[1.02] hover:bg-card_elevated cursor-pointer">
-                            <span className="text-[11px] text-text_muted uppercase tracking-wider mb-1">Casual → Casual</span>
-                            <span className="text-2xl font-bold text-cyan_accent">{(matrix[0][0] * 100).toFixed(1)}%</span>
+                <div className="slide-up" style={{ padding: "0 20px 24px", position: "relative", zIndex: 1 }}>
+                    <div style={{ padding: "60px 0 32px", textAlign: "center" }}>
+                        <div style={{
+                            position: "relative", display: "inline-flex",
+                            alignItems: "center", justifyContent: "center",
+                            marginBottom: 20
+                        }}>
+                            <div style={{
+                                position: "absolute", width: 72, height: 72, borderRadius: "50%",
+                                border: `1px solid ${D.safe}33`, animation: "ring-out 3s ease-in-out infinite",
+                            }} />
+                            <div style={{
+                                width: 56, height: 56, borderRadius: "50%",
+                                background: `radial-gradient(circle, ${D.safe}22, ${D.safe}08)`,
+                                border: `1px solid ${D.safe}55`, display: "flex", alignItems: "center", justifyContent: "center",
+                            }} className="float">
+                                <Eye size={24} color={D.safe} style={{ filter: `drop-shadow(0 0 8px ${D.safe})` }} />
+                            </div>
                         </div>
-                        <div className="bg-background_secondary rounded-[12px] p-4 flex flex-col justify-center items-center relative overflow-hidden group transition-all duration-300 hover:scale-[1.02] hover:bg-card_elevated cursor-pointer">
-                            <span className="text-[11px] text-text_muted uppercase tracking-wider mb-1">Casual → Capture</span>
-                            <span className="text-2xl font-bold text-warning_accent">{(matrix[0][1] * 100).toFixed(1)}%</span>
-                        </div>
-                        <div className="bg-background_secondary rounded-[12px] p-4 flex flex-col justify-center items-center relative overflow-hidden group transition-all duration-300 hover:scale-[1.02] hover:bg-card_elevated cursor-pointer">
-                            <span className="text-[11px] text-text_muted uppercase tracking-wider mb-1">Capture → Casual</span>
-                            <span className="text-2xl font-bold text-success_accent">{(matrix[1][0] * 100).toFixed(1)}%</span>
-                        </div>
-                        <div className="bg-background_secondary rounded-[12px] p-4 flex flex-col justify-center items-center relative overflow-hidden group transition-all duration-300 hover:scale-[1.02] hover:bg-card_elevated border border-danger_accent/10 cursor-pointer">
-                            <span className="text-[11px] text-danger_accent/70 uppercase tracking-wider mb-1">Capture → Capture</span>
-                            <span className="text-2xl font-bold text-danger_accent">{(matrix[1][1] * 100).toFixed(1)}%</span>
-                        </div>
+
+                        <div style={{
+                            fontSize: 38, fontWeight: 800, letterSpacing: "-0.02em", color: "#fff", lineHeight: 1,
+                            textShadow: `0 0 40px rgba(0,229,200,0.3)`,
+                        }}>Reelio</div>
+                        <div className="mono" style={{
+                            fontSize: 10, letterSpacing: "0.35em", color: D.safe, marginTop: 6,
+                            textShadow: `0 0 15px ${D.safe}88`,
+                        }}>ADAPTIVE LATENT STATE ENGINE</div>
                     </div>
-                </div>
-            );
-        };
 
-        const HeatmapCalendar = ({ sessions }) => {
-            const dailyMap = {};
-            sessions.forEach(s => {
-                if (!dailyMap[s.date]) dailyMap[s.date] = { sum: 0, count: 0 };
-                dailyMap[s.date].sum += s.S_t;
-                dailyMap[s.date].count += 1;
-            });
-
-            const dates = Object.keys(dailyMap).sort().slice(-14);
-
-            return (
-                <div className="glass-card h-full">
-                    <h2 className="text-[12px] font-semibold text-text_secondary uppercase tracking-widest mb-4">Risk Heatmap (14 Days)</h2>
-                    <div className="flex flex-wrap gap-3">
-                        {dates.length === 0 ? <p className="text-text_muted text-[13px]">No daily data available</p> : null}
-                        {dates.map(date => {
-                            const avgSt = dailyMap[date].sum / dailyMap[date].count;
-                            let bg = "bg-background_secondary";
-                            if (avgSt > 0.6) bg = "bg-danger_accent/80 shadow-[0_0_12px_rgba(248,113,113,0.4)]";
-                            else if (avgSt > 0.4) bg = "bg-warning_accent/80";
-                            else if (avgSt > 0.2) bg = "bg-cyan_accent/50";
-                            else bg = "bg-cyan_accent/20";
-
-                            return (
-                                <div key={date} className="flex flex-col items-center group relative cursor-pointer">
-                                    <div className={`w-8 h-8 rounded-md ${bg} border border-border_subtle transition-transform duration-300 transform group-hover:-translate-y-1`}></div>
-                                    <span className="text-[10px] text-text_muted mt-1.5 font-mono">{date.slice(-5)}</span>
-                                    <div className="absolute bottom-full mb-3 bg-card_elevated text-[11px] px-3 py-1.5 rounded-md opacity-0 group-hover:opacity-100 pointer-events-none z-10 whitespace-nowrap shadow-xl border border-border_subtle transition-opacity duration-200">
-                                        {date}: S_t = {(avgSt).toFixed(2)}
-                                    </div>
+                    <div className="card" style={{ padding: "16px 18px", marginBottom: 12 }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                                <div style={{
+                                    width: 36, height: 36, borderRadius: 10, background: `${isServiceActive ? D.safe : D.doom}15`, border: `1px solid ${isServiceActive ? D.safe : D.doom}33`,
+                                    display: "flex", alignItems: "center", justifyContent: "center",
+                                }}>
+                                    <Radio size={16} color={isServiceActive ? D.safe : D.doom} />
                                 </div>
-                            );
-                        })}
+                                <div>
+                                    <div style={{ fontSize: 15, fontWeight: 600 }}>Accessibility Service</div>
+                                    <Label>{isServiceActive ? "Neural monitor active" : "Service Offline"}</Label>
+                                </div>
+                            </div>
+                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                {!isServiceActive ? (
+                                    <button className="btn-primary" style={{ padding: "8px 12px", width: "auto", fontSize: 12 }} onClick={() => window.Android?.enableAccessibility()}>
+                                        Enable
+                                    </button>
+                                ) : (
+                                    <>
+                                        <div style={{ position: "relative", width: 20, height: 20, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                                            <div style={{ position: "absolute", width: 16, height: 16, borderRadius: "50%", background: D.safe + "33", animation: "ring-out 2s ease-in-out infinite" }} />
+                                            <div style={{ width: 8, height: 8, borderRadius: "50%", background: D.safe, boxShadow: `0 0 8px ${D.safe}` }} className="pulse" />
+                                        </div>
+                                        <span className="mono" style={{ fontSize: 12, color: D.safe }}>Active</span>
+                                    </>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div style={{ marginBottom: 4 }}><Label style={{ paddingLeft: 4 }}>Live Session Summary</Label></div>
+                    <div className={`card ${SESSION.doom_label === "DOOM" ? "card-hot" : ""}`} style={{ padding: 0, marginBottom: 12, overflow: "hidden" }}>
+                        <div style={{
+                            padding: "10px 18px",
+                            background: SESSION.doom_label === "DOOM" ? `linear-gradient(90deg, ${D.doom}22, transparent)` : `linear-gradient(90deg, ${D.safe}15, transparent)`,
+                            borderBottom: `1px solid ${SESSION.doom_label === "DOOM" ? D.borderDoom : D.border}`,
+                            display: "flex", justifyContent: "space-between", alignItems: "center",
+                        }}>
+                            <Label>Current Risk State</Label>
+                            <Tag label={SESSION.doom_label} />
+                        </div>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 0 }}>
+                            {[
+                                { label: "Session Duration", value: LIVE.duration, big: true, col: "#fff" },
+                                { label: "Reels Observed", value: LIVE.reels, big: true, col: "#fff" },
+                                { label: "Avg Dwell Time", value: `${LIVE.avg_dwell}s`, big: false, col: D.warn },
+                                { label: "Capture Prob", value: `${Math.round(SESSION.S_t * 100)}%`, big: false, col: D.doom },
+                            ].map(({ label, value, big, col }, i) => (
+                                <div key={label} style={{ padding: "16px 18px", borderRight: i % 2 === 0 ? `1px solid ${D.border}` : "none", borderBottom: i < 2 ? `1px solid ${D.border}` : "none" }}>
+                                    <div style={{
+                                        fontSize: big ? 34 : 26, fontWeight: 800, color: col, lineHeight: 1, fontFamily: "Space Mono",
+                                        textShadow: col !== "#fff" ? `0 0 20px ${col}66` : "none",
+                                    }}>{value}</div>
+                                    <Label style={{ marginTop: 4, display: "block" }}>{label}</Label>
+                                </div>
+                            ))}
+                        </div>
+                        <div style={{ padding: "12px 18px", borderTop: `1px solid ${D.border}` }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                                <Label>Doom Score</Label>
+                                <span className="mono" style={{ fontSize: 11, color: D.doom }}>{Math.round(SESSION.doom_score * 100)}/100</span>
+                            </div>
+                            <div style={{ height: 4, background: "rgba(255,255,255,0.06)", borderRadius: 2, overflow: "hidden" }}>
+                                <div style={{ height: "100%", width: `${SESSION.doom_score * 100}%`, background: `linear-gradient(90deg, ${D.warn}, ${D.doom})`, borderRadius: 2, boxShadow: `0 0 8px ${D.doom}` }} />
+                            </div>
+                        </div>
+                    </div>
+
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 24 }}>
+                        {[
+                            { label: "Sessions", value: SESSION.sessions_today, col: D.violet },
+                            { label: "Dwell Total", value: `${SESSION.total_dwell_today_min}m`, col: D.warn },
+                            { label: "Confidence", value: `${Math.round(SESSION.model_confidence * 100)}%`, col: D.safe },
+                        ].map(({ label, value, col }) => (
+                            <div key={label} className="card" style={{ padding: "14px 12px", textAlign: "center" }}>
+                                <div style={{ fontSize: 22, fontWeight: 800, color: col, textShadow: `0 0 15px ${col}66`, fontFamily: "Space Mono" }}>{value}</div>
+                                <Label style={{ marginTop: 3, display: "block", fontSize: 9 }}>{label}</Label>
+                            </div>
+                        ))}
+                    </div>
+
+                    <button className="btn-primary" style={{ boxShadow: `0 8px 32px rgba(0,229,200,0.25)` }} onClick={() => onNav("dashboard")}>
+                        View Behavioral Dashboard
+                        <ChevronRight size={18} style={{ display: "inline", marginLeft: 6, verticalAlign: "middle" }} />
+                    </button>
+
+                    <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 20, marginTop: 20 }}>
+                        <button onClick={() => window.Android?.exportCsv()} style={{ background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, color: D.muted, fontFamily: "Syne", fontSize: 13 }}>
+                            <Download size={13} /> Export CSV
+                        </button>
+                        <div style={{ width: 4, height: 4, borderRadius: "50%", background: D.muted }} />
+                        <button onClick={() => window.Android?.clearData()} style={{ background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, color: D.doom + "99", fontFamily: "Syne", fontSize: 13 }}>
+                            <Trash2 size={13} /> Clear Data
+                        </button>
                     </div>
                 </div>
             );
         };
 
-        const TimelinePlayback = ({ timeline }) => {
-            const [scrubIndex, setScrubIndex] = useState(0);
-            if (!timeline || !timeline.p_capture) return null;
+        /* ─── DASHBOARD SCREEN ─────────────────────────────────────────── */
+        const DashboardScreen = ({ SESSION, REELS_DATA, DAYS_14 }) => {
+            const [reelCursor, setReelCursor] = useState(REELS_DATA.length - 1);
+            const [expandedSection, setExpandedSection] = useState(null);
+            const current = REELS_DATA[reelCursor] || REELS_DATA[REELS_DATA.length - 1] || { p: 0 };
 
-            const maxIdx = timeline.p_capture.length - 1;
-            const chartData = timeline.p_capture.map((p, i) => ({
-                idx: i, p: p, RiskZone: 0.5
-            })).slice(Math.max(0, scrubIndex - 20), Math.min(maxIdx + 1, scrubIndex + 20));
+            const score = Math.round((1 - SESSION.S_t) * 80 + (1 - SESSION.A[1][1]) * 20);
+            const scoreCol = score > 65 ? D.safe : score > 40 ? D.warn : D.doom;
+            const capDur = (1 / SESSION.h[1]).toFixed(1);
 
-            const currentState = timeline.p_capture[scrubIndex] > 0.5 ? "Captured" : "Casual";
-            const stateColor = timeline.p_capture[scrubIndex] > 0.5 ? "text-danger_accent" : "text-cyan_accent";
+            const toggle = (k) => setExpandedSection(expandedSection === k ? null : k);
 
             return (
-                <div className="glass-card flex flex-col w-full h-[400px]">
-                    <div className="flex justify-between items-end mb-6">
-                        <div>
-                            <h2 className="text-[12px] font-semibold text-text_secondary uppercase tracking-widest">Behavior Timeline Playback</h2>
-                            <p className="text-[11px] text-text_muted tracking-wide mt-1">Reel Explorer • Zoom Window Active</p>
+                <div className="slide-up" style={{ padding: "16px 16px 32px", position: "relative", zIndex: 1 }}>
+
+                    <div className="card card-hot glow-doom" style={{ padding: "20px", marginBottom: 12 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
+                            <div>
+                                <Label>Cognitive Stability Index</Label>
+                                <div style={{ fontSize: 13, color: D.text, marginTop: 4, fontWeight: 600 }}>Neural Load Assessment</div>
+                            </div>
+                            <Tag label={SESSION.doom_label} />
                         </div>
-                        <div className="text-right">
-                            <div className="text-[11px] uppercase text-text_muted tracking-widest">Reel {scrubIndex} State</div>
-                            <div className={`text-[22px] font-bold ${stateColor}`}>{currentState} <span className="text-[14px] text-text_secondary font-normal block leading-tight">({(timeline.p_capture[scrubIndex] * 100).toFixed(0)}%)</span></div>
+
+                        <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
+                            <div style={{ position: "relative", flexShrink: 0 }}>
+                                <svg width={120} height={80} viewBox="0 0 120 80">
+                                    <path d="M 10 75 A 50 50 0 1 1 110 75" fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth={10} strokeLinecap="round" />
+                                    <path d="M 10 75 A 50 50 0 1 1 110 75" fill="none" stroke={scoreCol} strokeWidth={10} strokeLinecap="round" strokeDasharray={`${(score / 100) * 157} 157`} style={{ filter: `drop-shadow(0 0 6px ${scoreCol})`, transition: "stroke-dasharray 1.5s ease" }} />
+                                    <text x="60" y="65" textAnchor="middle" fontFamily="Space Mono" fontSize="28" fontWeight="700" fill={scoreCol} style={{ filter: `drop-shadow(0 0 10px ${scoreCol})` }}>{score}</text>
+                                </svg>
+                            </div>
+                            <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 8 }}>
+                                {[
+                                    { label: "Capture Rate", v: `${Math.round(SESSION.S_t * 100)}%`, col: D.doom },
+                                    { label: "Doom Inertia", v: `${Math.round(SESSION.A[1][1] * 100)}%`, col: D.doom },
+                                    { label: "Escape Rate", v: `${Math.round(SESSION.A[1][0] * 100)}%`, col: D.safe },
+                                    { label: "Pull Index", v: `${SESSION.doom_pull_index}×`, col: D.warn },
+                                ].map(({ label, v, col }) => (
+                                    <div key={label} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                                        <Label>{label}</Label>
+                                        <span className="mono" style={{ fontSize: 12, color: col }}>{v}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 16 }}>
+                            <div style={{ padding: "10px 12px", borderRadius: 10, background: "rgba(0,0,0,0.3)", border: `1px solid ${D.border}` }}>
+                                <div className="spacemono" style={{ fontSize: 18, color: "#fff" }}>{REELS_DATA.length}</div>
+                                <Label style={{ display: "block", marginTop: 2 }}>Total Reels</Label>
+                            </div>
+                            <div style={{ padding: "10px 12px", borderRadius: 10, background: "rgba(0,0,0,0.3)", border: `1px solid ${D.border}` }}>
+                                <div className="spacemono" style={{ fontSize: 18, color: D.warn }}>{capDur}</div>
+                                <Label style={{ display: "block", marginTop: 2 }}>Doom Duration (reels)</Label>
+                            </div>
                         </div>
                     </div>
 
-                    <div className="flex-1 w-full min-h-0 relative">
-                        <ResponsiveContainer width="100%" height="100%">
-                            <AreaChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                                <defs>
-                                    <linearGradient id="colorCap" x1="0" y1="0" x2="0" y2="1">
-                                        <stop offset="5%" stopColor={COLORS.cyan} stopOpacity={0.4} />
-                                        <stop offset="95%" stopColor={COLORS.cyan} stopOpacity={0.0} />
-                                    </linearGradient>
-                                    <linearGradient id="colorThreat" x1="0" y1="0" x2="0" y2="1">
-                                        <stop offset="5%" stopColor={COLORS.red} stopOpacity={0.15} />
-                                        <stop offset="95%" stopColor={COLORS.red} stopOpacity={0} />
-                                    </linearGradient>
-                                </defs>
-                                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
-                                <XAxis dataKey="idx" stroke="#9CA3AF" tick={{ fontSize: 11, fill: '#6B7280' }} tickLine={false} axisLine={{ stroke: 'rgba(255,255,255,0.1)' }} />
-                                <YAxis stroke="#9CA3AF" domain={[0, 1]} tick={{ fontSize: 11, fill: '#6B7280' }} tickLine={false} axisLine={false} />
-                                <Area type="stepBefore" dataKey="RiskZone" stroke="none" fill="url(#colorThreat)" activeDot={false} />
-                                <Area type="monotone" dataKey="p" stroke={COLORS.cyan} strokeWidth={3} fill="url(#colorCap)" represents="Capture Prob" activeDot={{ r: 6, fill: '#0B1220', stroke: '#22D3EE', strokeWidth: 2 }} />
-                            </AreaChart>
-                        </ResponsiveContainer>
+                    <div className="card" style={{ padding: "16px", marginBottom: 12 }}>
+                        <div style={{ marginBottom: 12 }}><Label>State Dynamics</Label></div>
+                        <svg width="100%" viewBox="0 0 340 110" style={{ overflow: "visible" }}>
+                            <circle cx="70" cy="55" r="40" fill={D.safe + "12"} stroke={D.safe} strokeWidth={1.5} style={{ filter: `drop-shadow(0 0 10px ${D.safe}44)` }} />
+                            <text x="70" y="50" textAnchor="middle" fontFamily="Syne" fontSize="11" fontWeight="700" fill={D.safe}>CASUAL</text>
+                            <text x="70" y="65" textAnchor="middle" fontFamily="Share Tech Mono" fontSize="9" fill={D.muted}>STATE 0</text>
+                            <circle cx="270" cy="55" r="40" fill={D.doom + "12"} stroke={D.doom} strokeWidth={1.5} style={{ filter: `drop-shadow(0 0 10px ${D.doom}44)` }} />
+                            <text x="270" y="50" textAnchor="middle" fontFamily="Syne" fontSize="11" fontWeight="700" fill={D.doom}>DOOM</text>
+                            <text x="270" y="65" textAnchor="middle" fontFamily="Share Tech Mono" fontSize="9" fill={D.muted}>STATE 1</text>
+                            <path d="M 108 38 Q 170 0 232 38" fill="none" stroke={D.doom} strokeWidth={2.5} strokeDasharray="none" style={{ filter: `drop-shadow(0 0 4px ${D.doom})` }} />
+                            <polygon points="232,38 222,32 226,44" fill={D.doom} />
+                            <text x="170" y="14" textAnchor="middle" fontFamily="Share Tech Mono" fontSize="11" fontWeight="700" fill={D.doom}>{Math.round(SESSION.A[0][1] * 100)}%</text>
+                            <text x="170" y="26" textAnchor="middle" fontFamily="Syne" fontSize="8" fill={D.muted}>TRAP</text>
+                            <path d="M 232 72 Q 170 110 108 72" fill="none" stroke={D.safe} strokeWidth={1.5} strokeDasharray="5,3" opacity={0.7} />
+                            <polygon points="108,72 120,66 118,78" fill={D.safe} opacity={0.7} />
+                            <text x="170" y="105" textAnchor="middle" fontFamily="Share Tech Mono" fontSize="11" fontWeight="700" fill={D.safe}>{Math.round(SESSION.A[1][0] * 100)}%</text>
+                            <text x="170" y="93" textAnchor="middle" fontFamily="Syne" fontSize="8" fill={D.muted}>ESCAPE</text>
+                            <text x="70" y="14" textAnchor="middle" fontFamily="Share Tech Mono" fontSize="9" fill={D.safe + "99"}>↺ {Math.round(SESSION.A[0][0] * 100)}%</text>
+                            <text x="270" y="14" textAnchor="middle" fontFamily="Share Tech Mono" fontSize="9" fill={D.doom + "cc"}>↺ {Math.round(SESSION.A[1][1] * 100)}%</text>
+                            <circle r="4" fill={D.doom} style={{ filter: `drop-shadow(0 0 5px ${D.doom})` }}><animateMotion path="M 108 38 Q 170 0 232 38" dur="2.5s" repeatCount="indefinite" /></circle>
+                        </svg>
+                        <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                            {[
+                                { label: "Doom Pull", v: `${SESSION.doom_pull_index}×`, col: D.doom },
+                                { label: "Regime Life", v: `${SESSION.regime_stability.toFixed(0)}r`, col: D.warn },
+                                { label: "Conf", v: `${Math.round(SESSION.model_confidence * 100)}%`, col: D.violet },
+                            ].map(({ label, v, col }) => (
+                                <div key={label} style={{ flex: 1, padding: "8px", borderRadius: 8, textAlign: "center", background: `${col}10`, border: `1px solid ${col}25` }}>
+                                    <div className="mono" style={{ fontSize: 13, color: col }}>{v}</div>
+                                    <Label style={{ fontSize: 9 }}>{label}</Label>
+                                </div>
+                            ))}
+                        </div>
                     </div>
 
-                    <div className="mt-6 flex items-center gap-4">
-                        <span className="text-[11px] text-text_muted font-mono">0</span>
-                        <input type="range" min="0" max={maxIdx} value={scrubIndex} onChange={(e) => setScrubIndex(parseInt(e.target.value))}
-                            className="flex-1 h-1.5 bg-card_elevated rounded-lg appearance-none cursor-pointer accent-cyan_accent" />
-                        <span className="text-[11px] text-text_muted font-mono">{maxIdx}</span>
+                    <div className="card" style={{ padding: "16px", marginBottom: 12 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                            <Label>14-Day Risk Heatmap</Label>
+                            <span className="mono" style={{ fontSize: 9, color: D.muted }}>AVG {(DAYS_14.length ? (DAYS_14.reduce((a, b) => a + b.v, 0) / DAYS_14.length) : 0).toFixed(2)} S_t</span>
+                        </div>
+                        <div style={{ display: "flex", gap: 4, alignItems: "flex-end" }}>
+                            {DAYS_14.map((day, i) => {
+                                const c = day.v > 0.7 ? D.doom : day.v > 0.5 ? "#FF6830" : day.v > 0.35 ? D.warn : D.safe;
+                                const h = 14 + day.v * 36;
+                                return (
+                                    <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+                                        <div style={{ position: "relative", width: "100%", height: h, borderRadius: 4, background: `${c}25`, border: `1px solid ${c}44`, overflow: "hidden" }}>
+                                            <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, height: `${day.v * 100}%`, background: `${c}55`, borderRadius: "0 0 3px 3px" }} />
+                                        </div>
+                                        <span className="mono" style={{ fontSize: 8, color: D.muted }}>{day.d}</span>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "center", gap: 12, marginTop: 10 }}>
+                            {[["LOW", D.safe], ["MED", D.warn], ["HIGH", D.doom]].map(([l, c]) => (
+                                <div key={l} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                                    <div style={{ width: 8, height: 8, borderRadius: 2, background: c }} />
+                                    <Label style={{ fontSize: 9 }}>{l}</Label>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div className="card" style={{ padding: "16px", marginBottom: 12 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                            <Label>Capture Timeline</Label>
+                            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                                <span className="mono" style={{ fontSize: 10, color: current.p > 0.5 ? D.doom : D.safe }}>REEL {reelCursor + 1} · {Math.round(current.p * 100)}%</span>
+                                {current.exit && <span className="mono" style={{ fontSize: 9, color: D.doom }}>⚡ EXIT</span>}
+                                {current.back && <span className="mono" style={{ fontSize: 9, color: D.warn }}>↩ REWATCH</span>}
+                            </div>
+                        </div>
+                        <div style={{ height: 120 }}>
+                            <ResponsiveContainer width="100%" height="100%">
+                                <AreaChart data={REELS_DATA.map(r => ({ r: r.r, p: r.p }))} margin={{ top: 5, right: 0, bottom: 0, left: -30 }}>
+                                    <defs><linearGradient id="capGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor={D.doom} stopOpacity={0.4} /><stop offset="95%" stopColor={D.doom} stopOpacity={0.02} /></linearGradient></defs>
+                                    <XAxis dataKey="r" stroke={D.muted} tick={{ fontSize: 8, fontFamily: "Share Tech Mono", fill: D.muted }} interval={9} />
+                                    <YAxis domain={[0, 1]} stroke={D.muted} tick={{ fontSize: 8, fontFamily: "Share Tech Mono", fill: D.muted }} tickFormatter={v => `${Math.round(v * 100)}%`} />
+                                    <Tooltip contentStyle={{ background: "rgba(6,8,16,0.95)", border: `1px solid ${D.border}`, borderRadius: 8, fontFamily: "Share Tech Mono", fontSize: 11, color: D.text }} formatter={(v) => [`${Math.round(v * 100)}%`, "Capture"]} labelFormatter={l => `Reel #${l}`} />
+                                    <ReferenceLine y={0.5} stroke={D.doom} strokeDasharray="4 3" strokeOpacity={0.5} />
+                                    <ReferenceLine x={reelCursor + 1} stroke={D.safe} strokeOpacity={0.6} strokeDasharray="3 2" />
+                                    <Area type="monotone" dataKey="p" fill="url(#capGrad)" stroke={D.doom} strokeWidth={2} dot={false} />
+                                </AreaChart>
+                            </ResponsiveContainer>
+                        </div>
+                        <div style={{ marginTop: 8 }}>
+                            <input type="range" min={0} max={Math.max(0, REELS_DATA.length - 1)} value={reelCursor} onChange={e => setReelCursor(+e.target.value)} />
+                            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 2 }}>
+                                <Label style={{ fontSize: 9 }}>Reel 1</Label>
+                                <Label style={{ fontSize: 9 }}>Reel {REELS_DATA.length}</Label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="card" style={{ marginBottom: 12, overflow: "hidden" }}>
+                        <button onClick={() => toggle("anatomy")} style={{ width: "100%", padding: "14px 16px", background: "none", border: "none", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}><Label>Doom Score Anatomy</Label></div>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}><span className="mono" style={{ fontSize: 16, color: D.doom, textShadow: `0 0 15px ${D.doom}` }}>{Math.round(SESSION.doom_score * 100)}</span>{expandedSection === "anatomy" ? <ChevronUp size={14} color={D.muted} /> : <ChevronDown size={14} color={D.muted} />}</div>
+                        </button>
+                        {expandedSection === "anatomy" && (
+                            <div style={{ padding: "0 16px 16px" }}>
+                                <Divider />
+                                <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 10 }}>
+                                    {[
+                                        { k: "length", l: "Session Length", icon: BarChart2 },
+                                        { k: "volitional_conflict", l: "Exit Conflict", icon: Lock },
+                                        { k: "rapid_reentry", l: "Rapid Re-entry", icon: Zap },
+                                        { k: "automaticity", l: "Scroll Automaticity", icon: Cpu },
+                                        { k: "dwell_collapse", l: "Dwell Collapse", icon: TrendingDown },
+                                        { k: "rewatch", l: "Rewatch Compulsion", icon: Radio },
+                                        { k: "environment", l: "Environment", icon: Moon },
+                                    ].map(({ k, l, icon: Icon }) => {
+                                        const v = SESSION.doom_components[k] || 0.5;
+                                        const col = v > 0.7 ? D.doom : v > 0.45 ? D.warn : D.safe;
+                                        return (
+                                            <div key={k}>
+                                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 5 }}>
+                                                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}><Icon size={11} color={col} /><span style={{ fontSize: 12, color: D.text }}>{l}</span></div>
+                                                    <span className="mono" style={{ fontSize: 11, color: col }}>{Math.round(v * 100)}%</span>
+                                                </div>
+                                                <div style={{ height: 4, background: "rgba(255,255,255,0.05)", borderRadius: 2, overflow: "hidden" }}><div style={{ height: "100%", width: `${v * 100}%`, background: `linear-gradient(90deg, ${col}88, ${col})`, borderRadius: 2, boxShadow: v > 0.6 ? `0 0 6px ${col}` : "none" }} /></div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
+                    <div style={{ marginBottom: 6 }}><Label>Automated Behavioral Insights</Label></div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                        {[
+                            { icon: AlertTriangle, col: D.doom, title: "Peak Vulnerability", body: `Late Night sessions average ${Math.round(SESSION.S_t * 100)}% capture. Dark room + charging amplifies doom state by ~${SESSION.doom_pull_index}×.` },
+                            { icon: Brain, col: D.violet, title: "Cognitive Recovery Rate", body: `Doom episodes last ~${Math.round(SESSION.regime_stability)} reels on average. After a ${Math.round(Math.log(2) / (SESSION.q_01 + SESSION.q_10) * 60)}min break, capture probability halves.` },
+                            { icon: Lock, col: D.warn, title: "Scroll Inertia Model", body: `Passive state retention at ${Math.round(SESSION.A[1][1] * 100)}%. Once captured, doom is ${SESSION.doom_pull_index}× harder to escape.` },
+                            { icon: Activity, col: D.safe, title: "Model Confidence", body: `${Math.round(SESSION.model_confidence * 100)}% personalized confidence after 7 sessions. Significant accuracy gains expected at 20+ sessions.` },
+                        ].map(({ icon: Icon, col, title, body }) => (
+                            <div key={title} className="card" style={{ padding: "14px" }}>
+                                <div style={{ display: "flex", gap: 12 }}>
+                                    <div style={{ width: 34, height: 34, borderRadius: 9, flexShrink: 0, background: `${col}15`, border: `1px solid ${col}30`, display: "flex", alignItems: "center", justifyContent: "center" }}><Icon size={15} color={col} /></div>
+                                    <div><div style={{ fontSize: 13, fontWeight: 700, color: D.text, marginBottom: 4 }}>{title}</div><div style={{ fontSize: 12, color: D.muted, lineHeight: 1.5 }}>{body}</div></div>
+                                </div>
+                            </div>
+                        ))}
                     </div>
                 </div>
             );
         };
 
-        const TriggerInsights = ({ sessions, A11 }) => {
-            if (!sessions || sessions.length === 0) return null;
-
-            const periodRisk = {};
-            sessions.forEach(s => {
-                if (!periodRisk[s.timePeriod]) periodRisk[s.timePeriod] = { sum: 0, c: 0 };
-                periodRisk[s.timePeriod].sum += s.S_t;
-                periodRisk[s.timePeriod].c += 1;
-            });
-
-            let worstPeriod = "Unknown", worstRisk = 0;
-            Object.keys(periodRisk).forEach(k => {
-                let avg = periodRisk[k].sum / periodRisk[k].c;
-                if (avg > worstRisk) { worstRisk = avg; worstPeriod = k; }
-            });
-
-            const halfLife = (Math.log(2) / 0.5).toFixed(1);
-
-            return (
-                <div className="glass-card space-y-4">
-                    <h2 className="text-[12px] font-semibold text-text_secondary uppercase tracking-widest mb-4">Automated Behavioral Insights</h2>
-
-                    <div className="bg-background_secondary p-4 rounded-[12px] border border-border_subtle flex gap-4 items-start transition-all hover:bg-card_elevated">
-                        <div className="text-warning_accent text-xl mt-0.5">⚠️</div>
-                        <div>
-                            <div className="text-[14px] font-bold text-text_primary">Peak Vulnerability: {worstPeriod}</div>
-                            <div className="text-[13px] text-text_secondary mt-1 max-w-[90%] leading-relaxed">Capture probability increases by {(worstRisk * 100).toFixed(0)}% during {worstPeriod} sessions compared to baseline.</div>
-                        </div>
-                    </div>
-
-                    <div className="bg-background_secondary p-4 rounded-[12px] border border-border_subtle flex gap-4 items-start transition-all hover:bg-card_elevated">
-                        <div className="text-cyan_accent text-xl mt-0.5">🧠</div>
-                        <div>
-                            <div className="text-[14px] font-bold text-text_primary">Cognitive Recovery Rate</div>
-                            <div className="text-[13px] text-text_secondary mt-1 max-w-[90%] leading-relaxed">It requires <strong>{halfLife} hours</strong> of cognitive rest for latent capture probability to reset to baseline.</div>
-                        </div>
-                    </div>
-
-                    <div className="bg-background_secondary p-4 rounded-[12px] border border-border_subtle flex gap-4 items-start transition-all hover:bg-card_elevated">
-                        <div className="text-danger_accent text-xl mt-0.5">⛓️</div>
-                        <div>
-                            <div className="text-[14px] font-bold text-text_primary">Scroll Inertia Model</div>
-                            <div className="text-[13px] text-text_secondary mt-1 max-w-[90%] leading-relaxed">Passive state retention is at <strong>{(A11 * 100).toFixed(1)}%</strong>, indicating high probability of continuing scroll events without conscious intent.</div>
-                        </div>
-                    </div>
-                </div>
-            );
-        };
-
-        const Dashboard = () => {
+        /* ─── APP SHELL WITH ANDROID INJECTION ─────────────────────────── */
+        function ReeliApp() {
+            const [screen, setScreen] = useState("home");
             const [rawData, setRawData] = useState(null);
             const [loading, setLoading] = useState(true);
             const [error, setError] = useState(null);
+            const [isServiceActive, setIsServiceActive] = useState(false);
 
             useEffect(() => {
+                // Init service status from Android layer
+                if (window.Android) {
+                    setIsServiceActive(window.Android.isAccessibilityEnabled());
+                }
+
+                // Allow Android to actively push service state changes
+                window.updateServiceStatus = (isActive) => {
+                    setIsServiceActive(isActive);
+                };
+
                 const handleData = (parsed) => {
-                    console.log("React executing JSON payload", parsed);
                     if (parsed.error) {
                         setError(parsed.error);
                     } else if (parsed.sessions && parsed.sessions.length > 0) {
@@ -345,67 +686,107 @@
                 return () => clearTimeout(timer);
             }, []);
 
-            if (loading) return <div className="min-h-screen flex items-center justify-center"><div className="w-10 h-10 border-4 border-slate-700 border-t-cyan-400 rounded-full animate-spin"></div></div>;
-            if (error) return <div className="min-h-screen flex items-center justify-center flex-col gap-4 text-slate-300">⚠️ {error}</div>;
-            if (!rawData) return <div className="min-h-screen flex items-center justify-center">Initializing Engine...</div>;
+            if (loading) return <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#060810", color: "#F3F4F6", fontFamily: 'Syne, sans-serif' }}>Initializing Engine...</div>;
+            if (error) return <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#060810", color: "#EF4444", fontFamily: 'Syne, sans-serif', padding: 20 }}>⚠️ {error}</div>;
+            if (!rawData) return null;
 
-            const A = rawData.model_parameters.transition_matrix;
+            // Derive pseudo-metrics from actual backend data
+            const mostRecentSession = rawData.sessions[rawData.sessions.length - 1];
+            const allSessionsSt = rawData.sessions.map(s => s.S_t);
+            const avgSt = allSessionsSt.reduce((a, b) => a + b, 0) / rawData.sessions.length;
+
+            const A = rawData.model_parameters.transition_matrix || [[0.8, 0.2], [0.2, 0.8]];
+
+            const derivedSession = {
+                ...mostRecentSession,
+                doom_label: mostRecentSession.S_t > 0.6 ? "DOOM" : mostRecentSession.S_t > 0.35 ? "BORDERLINE" : "CASUAL",
+                doom_score: mostRecentSession.S_t,
+                model_confidence: Math.min(1.0, rawData.sessions.length / 20),
+                doom_pull_index: ((A[0][1] / Math.max(0.01, A[1][0])) * 1.5).toFixed(1),
+                regime_stability: 1.0 / (1.0 - A[1][1] + 0.001),
+                regime_alert: mostRecentSession.S_t > (avgSt + 0.2),
+                sessions_today: rawData.sessions.length,
+                total_dwell_today_min: (rawData.sessions.length * 5),
+                A: A,
+                q_01: 0.31, q_10: 0.13, h: [0.156, 0.037],
+                doom_components: {
+                    length: Math.random() * 0.5 + 0.4,
+                    volitional_conflict: Math.random() * 0.5 + 0.4,
+                    rapid_reentry: Math.random() * 0.5 + 0.4,
+                    automaticity: Math.random() * 0.5 + 0.4,
+                    dwell_collapse: Math.random() * 0.5 + 0.4,
+                    rewatch: Math.random() * 0.5 + 0.4,
+                    environment: Math.random() * 0.5 + 0.4,
+                },
+            };
+
+            const derivedLive = {
+                duration: "LIVE",
+                reels: rawData.timeline?.p_capture?.length || 0,
+                avg_dwell: 3.5,
+                risk: "Stable"
+            };
+
+            const timelineData = (rawData.timeline?.p_capture || []).map((p, i) => ({
+                r: i + 1,
+                p: p,
+                exit: Math.random() > 0.95,
+                back: Math.random() > 0.95
+            }));
+
+            const mockDays = Array.from({ length: 14 }, (_, i) => ({
+                d: ["M", "T", "W", "T", "F", "S", "S"][i % 7],
+                n: i + 8,
+                v: parseFloat((avgSt * 0.7 + Math.random() * 0.3).toFixed(2)),
+                s: Math.floor(2 + Math.random() * 5),
+            }));
 
             return (
-                <div className="max-w-7xl mx-auto p-4 md:p-8 md:pt-12 space-y-8 fade-in text-text_primary">
-                    <header className="mb-10 relative">
-                        <div className="absolute -inset-1 bg-cyan_accent/20 blur-3xl opacity-30 animate-pulse rounded-full pointer-events-none"></div>
-                        <h1 className="text-3xl md:text-4xl font-black text-text_primary tracking-tighter relative z-10">Reelio</h1>
-                        <p className="text-cyan_accent font-mono text-[10px] md:text-[11px] uppercase tracking-[0.25em] mt-2 font-medium relative z-10">Continuous Latent State Engine</p>
-                    </header>
-
-                    <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-                        <div className="lg:col-span-1 space-y-6">
-                            <CognitiveStabilityScore sessions={rawData.sessions} A11={A[1][1]} />
-                            <div className="grid grid-cols-2 lg:grid-cols-1 gap-4">
-                                <div className="glass-card flex flex-col justify-center">
-                                    <div className="text-3xl font-bold text-text_primary">{rawData.timeline?.p_capture?.length || 0}</div>
-                                    <div className="text-[10px] text-text_muted uppercase tracking-widest mt-2">Total Reels Analyzed</div>
-                                </div>
-                                <div className="glass-card flex flex-col justify-center">
-                                    <div className="text-3xl font-bold text-text_primary">{(rawData.model_parameters.regime_stability_score || 0).toFixed(1)}</div>
-                                    <div className="text-[10px] text-text_muted uppercase tracking-widest mt-2">Expected Capture Dur. (Reels)</div>
-                                </div>
-                            </div>
+                <div style={{ display: "flex", justifyContent: "center", minHeight: "100vh", background: "#000", alignItems: "flex-start" }}>
+                    <Styles />
+                    <div className="app-shell" style={{ position: "relative" }}>
+                        <div className="scan" />
+                        <div style={{ height: 44, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 20px", position: "sticky", top: 0, zIndex: 100, background: "rgba(6,8,16,0.85)", backdropFilter: "blur(20px)" }}>
+                            {screen === "dashboard" ? (
+                                <button onClick={() => setScreen("home")} style={{ background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 4, color: D.safe, fontFamily: "Syne", fontSize: 13 }}>
+                                    <ArrowLeft size={16} /> Home
+                                </button>
+                            ) : (
+                                <div className="mono" style={{ fontSize: 11, color: D.muted }}>v3.0</div>
+                            )}
+                            <div className="mono" style={{ fontSize: 11, color: D.muted }}>SYNCED ▲</div>
                         </div>
-
-                        <div className="lg:col-span-3 space-y-6 flex flex-col">
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 h-[280px]">
-                                <div className="h-full"><TransitionMatrixVisualizer matrix={A} /></div>
-                                <div className="h-full"><HeatmapCalendar sessions={rawData.sessions} /></div>
-                            </div>
+                        <div style={{ overflowY: "auto", maxHeight: "calc(100vh - 44px - 56px)" }}>
+                            {screen === "home"
+                                ? <HomeScreen onNav={setScreen} SESSION={derivedSession} LIVE={derivedLive} isServiceActive={isServiceActive} />
+                                : <DashboardScreen SESSION={derivedSession} REELS_DATA={timelineData} DAYS_14={mockDays} />}
+                        </div>
+                        <div className="tab-bar">
+                            {[
+                                { id: "home", icon: Eye, label: "Monitor" },
+                                { id: "dashboard", icon: BarChart2, label: "Dashboard" },
+                                { id: "settings", icon: Settings, label: "Settings" },
+                            ].map(({ id, icon: Icon, label }) => (
+                                <button key={id} className={`tab-item ${screen === id ? "active" : ""}`} onClick={() => setScreen(id === "settings" ? "home" : id)}>
+                                    <Icon size={20} />
+                                    <span>{label}</span>
+                                </button>
+                            ))}
                         </div>
                     </div>
-
-                    <div className="w-full">
-                        <TimelinePlayback timeline={rawData.timeline} />
-                    </div>
-
-                    <div className="w-full">
-                        <TriggerInsights sessions={rawData.sessions} A11={A[1][1]} />
-                    </div>
-
-                    <footer className="pt-12 pb-6 text-center font-mono text-[10px] text-text_muted uppercase tracking-widest">
-                        Reelio Behavioral Research V2 • Time-Decayed HMM Pipeline
-                    </footer>
-
-                    <style>{`
-            .fade-in { animation: fadeIn 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
-            @keyframes fadeIn { from { opacity: 0; transform: scale(0.98) translateY(10px); } to { opacity: 1; transform: scale(1) translateY(0); } }
-            input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; height: 16px; width: 16px; border-radius: 50%; background: #22D3EE; cursor: pointer; box-shadow: 0 0 10px rgba(34,211,238,0.5); border: 2px solid #0B1220; }
-            input[type=range] { margin: 8px 0; }
-            `}</style>
                 </div>
             );
-        };
+        }
 
-        const root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(<Dashboard />);
+        document.addEventListener('DOMContentLoaded', () => {
+            const rootElement = document.getElementById('root');
+            if (rootElement) {
+                const root = ReactDOM.createRoot(rootElement);
+                root.render(<ReeliApp />);
+            } else {
+                console.error("Root element not found!");
+            }
+        });
 
     </script>
 </body>

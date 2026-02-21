@@ -7,15 +7,15 @@ import androidx.room.Query
 @Dao
 interface SessionDao {
     @Insert
-    fun insert(session: SessionEntity): Long
+    fun insert(session: SessionEntity)
 
-    @Query("UPDATE sessions SET endTime = :endTime WHERE sessionId = :sessionId")
-    fun updateEndTime(sessionId: Long, endTime: Long)
+    @Query("UPDATE sessions SET sessionEnd = :endTime WHERE sessionId = :sessionId")
+    fun updateEndTime(sessionId: String, endTime: Long)
 
-    @Query("SELECT COUNT(*) FROM sessions WHERE date(startTime/1000, 'unixepoch') = date('now')")
+    @Query("SELECT COUNT(*) FROM sessions WHERE date(sessionStart/1000, 'unixepoch') = date('now')")
     fun sessionsToday(): Int
 
-    @Query("SELECT * FROM sessions ORDER BY startTime DESC LIMIT 1")
+    @Query("SELECT * FROM sessions ORDER BY sessionStart DESC LIMIT 1")
     fun getLastSession(): SessionEntity?
 }
 
@@ -25,7 +25,7 @@ interface ReelDao {
     fun insert(reel: ReelEntity): Long
 
     @Query("SELECT * FROM reels WHERE sessionId = :sessionId ORDER BY reelIndex ASC")
-    fun getReelsForSession(sessionId: Long): List<ReelEntity>
+    fun getReelsForSession(sessionId: String): List<ReelEntity>
 
     @Query("SELECT * FROM reels")
     fun getAll(): List<ReelEntity>

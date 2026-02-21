@@ -119,8 +119,8 @@ class DashboardActivity : ComponentActivity() {
                     var jsonContent = "{}"
                     try {
                         val py = Python.getInstance()
-                        val hmmModule = py.getModule("hmm")
-                        jsonContent = hmmModule.callAttr("run_hmm_from_string", csvContent).toString()
+                        val alseModule = py.getModule("reelio_alse")
+                        jsonContent = alseModule.callAttr("run_dashboard_payload", csvContent).toString()
                     } catch (e: Exception) {
                         android.util.Log.e("ReactDashboard", "Python Error: ${e.message}", e)
                         // Always send error back to React

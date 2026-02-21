@@ -14,7 +14,9 @@ object DatabaseProvider {
                 context.applicationContext,
                 AppDatabase::class.java,
                 "insta_tracker.db"
-            ).build()
+            )
+            .fallbackToDestructiveMigration()
+            .build()
             INSTANCE = instance
             instance
         }

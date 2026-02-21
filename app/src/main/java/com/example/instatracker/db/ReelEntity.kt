@@ -21,7 +21,7 @@ data class ReelEntity(
     @PrimaryKey(autoGenerate = true)
     val reelId: Long = 0,
 
-    val sessionId: Long,
+    val sessionId: String,
     val reelIndex: Int,
 
     val startTime: Long,

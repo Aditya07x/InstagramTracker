@@ -49,6 +49,7 @@ chaquopy {
         pip {
             install("numpy")
             install("pandas")
+            install("scipy")
         }
     }
 }
