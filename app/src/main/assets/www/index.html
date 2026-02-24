@@ -1323,7 +1323,7 @@
           regime_stability: 1.0 / (escapeRate + 0.001),
           sessions_today: rawData.sessions.length,
           total_doom_sessions: rawData.sessions.filter(function (s) { return s.S_t > 0.65; }).length,
-          total_interactions: rawData.sessions.reduce(function (acc, s) { return acc + (s.likes || 0) + (s.comments || 0) + (s.shares || 0) + (s.saves || 0); }, 0),
+          total_interactions: rawData.sessions.reduce(function (acc, s) { return acc + (s.totalLikes || 0) + (s.totalComments || 0) + (s.totalShares || 0) + (s.totalSaves || 0); }, 0),
           total_dwell_today_min: totalDwellMin,
           capture_rate: pLostTrack,
           time_period_avg_capture: timePeriodAvgCapture,
