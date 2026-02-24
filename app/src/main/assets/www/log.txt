@@ -1,0 +1,16 @@
+516: /* ── Simple SVG area chart (Circadian 24hr) ── */
+517: function CircadianAreaChartSVG(p) {
+587: if (window.CIRCADIAN && window.CIRCADIAN.length > 0) {
+589: window.CIRCADIAN.forEach(function (d) {
+740: /* Circadian Stats Computation */
+741: var usingCircadianFallback = (!Array.isArray(p.CIRCADIAN) || p.CIRCADIAN.length === 0) && (!window.CIRCADIAN || !Array.isArray(window.CIRCADIAN) || window.CIRCADIAN.length === 0);
+742: var circData = usingCircadianFallback ? [
+747: ] : (Array.isArray(p.CIRCADIAN) && p.CIRCADIAN.length > 0 ? p.CIRCADIAN : window.CIRCADIAN);
+988: { k: "environment", l: "Environment", icon: "Moon", desc: "Late night usage heavily penalizes your score due to the circadian disruption risk." }
+1044: /* ── Circadian Doom Profile (24h Pattern) ── */
+1046: usingCircadianFallback && e("div", {
+1054: e(Label, null, "Circadian Doom Profile · 24h Pattern"),
+1066: e(CircadianAreaChartSVG, {
+1129: d.circadian = Array.isArray(d.circadian) ? d.circadian : [];
+1142: window.CIRCADIAN = parsed.circadian;
+1275: : e(DashboardScreen, { SESSION: SESSION, REELS_DATA: REELS_DATA, DAYS_14: DAYS_14, CIRCADIAN: rawData.circadian || [], totalReelsAll: totalReelsAll, avgNReels: avgNReels })

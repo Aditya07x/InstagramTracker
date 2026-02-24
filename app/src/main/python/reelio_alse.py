@@ -150,8 +150,9 @@ class UserBaseline:
         self.speed_mu_personal = rho * self.speed_mu_personal + (1 - rho) * m_speed
         self.speed_sig_personal = rho * self.speed_sig_personal + (1 - rho) * s_speed
         
+        old_mu = self.session_len_mu
         self.session_len_mu = rho * self.session_len_mu + (1 - rho) * sess_len
-        self.session_len_sig = rho * self.session_len_sig + (1 - rho) * np.abs(sess_len - self.session_len_mu)
+        self.session_len_sig = rho * self.session_len_sig + (1 - rho) * np.abs(sess_len - old_mu)
         
         self.exit_rate_baseline = rho * self.exit_rate_baseline + (1 - rho) * exits
         self.rewatch_rate_base = rho * self.rewatch_rate_base + (1 - rho) * rewatches
@@ -362,10 +363,13 @@ class DoomScorer:
         regret = session_df['RegretScore'].iloc[0] if 'RegretScore' in session_df else 0
         mood_delta = session_df['MoodDelta'].iloc[0] if 'MoodDelta' in session_df else 0
         
+        amp = 0.0
         if (post_rating > 0 and post_rating < 3) or regret == 1:
-            ds = np.clip(ds * 1.2, 0.0, 1.0)
+            amp += 0.20
         if mood_delta < -1:
-            ds = np.clip(ds * 1.15, 0.0, 1.0)
+            amp += 0.15
+            
+        ds = np.clip(ds * (1.0 + amp), 0.0, 1.0)
             
         label = 'DOOM' if ds >= self.thresholds['DOOM'] else 'BORDERLINE' if ds >= self.thresholds['BORDERLINE'] else 'CASUAL'
         
@@ -481,8 +485,12 @@ class ReelioCLSE:
         }
 
     def _rollback(self):
+        ARRAY_KEYS = {'mu', 'sigma', 'A', 'pi', 'h', 'p_bern', 'feature_weights', 'rho_dwell_speed'}
         for k, v in self._checkpoint_dict.items():
-            setattr(self, k, v)
+            if k in ARRAY_KEYS:
+                setattr(self, k, np.array(v))
+            else:
+                setattr(self, k, v)
 
     def _a_gap(self, delta_t_hours: float) -> np.ndarray:
         if delta_t_hours < 1/60.0:
@@ -612,7 +620,6 @@ class ReelioCLSE:
                 for j in range(2):
                     log_xi = alpha[t, i] + trans[i, j] + self._log_emission(obs[t+1], j) + beta[t+1, j]
                     xi[t, i, j] = np.exp(log_xi - log_prob_obs)
-            xi[t] /= np.clip(xi[t].sum(), 1e-9, None)
             
         return gamma, xi, log_prob_obs
 
@@ -729,7 +736,7 @@ class ReelioCLSE:
                 mu1, sig1 = self.mu[k, 0], self.sigma[k, 0]
                 mu2, sig2 = self.mu[k, 1], self.sigma[k, 1]
                 kl = np.log(sig2/sig1) + (sig1**2 + (mu1-mu2)**2)/(2*sig2**2) - 0.5
-                kl_divs[k] = kl
+                kl_divs[k] = np.maximum(kl, 0.0)
             else: # Bernoulli
                 p1 = self.p_bern[k, 0]
                 p2 = self.p_bern[k, 1]
@@ -842,19 +849,23 @@ class ReelioCLSE:
             if g_mix[s] > 1e-3:
                 self.mu[:, s] = x_mix[:, s] / g_mix[s]
                 var = (x2_mix[:, s] / g_mix[s]) - (self.mu[:, s] ** 2)
-                self.sigma[:, s] = np.sqrt(np.clip(var, 0.0025, None))
-                
-                self.p_bern[3, s] = self.mu[3, s]
-                self.p_bern[4, s] = self.mu[4, s]
+                for k in range(self.num_features):
+                    if k in (3, 4):
+                        self.p_bern[k, s] = self.mu[k, s]
+                    else:
+                        self.sigma[k, s] = np.sqrt(max(var[k], 0.0025))
                 
                 cov = (xy_mix[s] / g_mix[s]) - (self.mu[0, s] * self.mu[1, s])
                 self.rho_dwell_speed[s] = cov / (self.sigma[0, s] * self.sigma[1, s] + 1e-9)
                 
         # Update A
+        sum_xi_mix = (w_r * self.SS_recent['sum_xi'] + 
+                      w_m * self.SS_medium['sum_xi'] + 
+                      w_l * self.SS_long['sum_xi'])
         for i in range(2):
-            den = self.SS_medium['sum_xi'][i, :].sum()
+            den = sum_xi_mix[i, :].sum()
             if den > 1e-3:
-                self.A[i, :] = self.SS_medium['sum_xi'][i, :] / den
+                self.A[i, :] = sum_xi_mix[i, :] / den
                 
         # Update Hazard
         alpha_prior = [3.0, 1.0]
@@ -952,9 +963,6 @@ def validate_model(model: ReelioCLSE) -> list:
     # Check 1: Emission ordering
     if model.mu[0, 1] <= model.mu[0, 0]:
         errors.append("Validation Failed: Doom Dwell mu must be > Casual Dwell mu")
-        
-    if model.sigma[0, 1] <= model.sigma[0, 0]:
-        errors.append("Validation Failed: Doom Dwell sigma must be > Casual Dwell sigma")
         
     if model.mu[1, 1] >= model.mu[1, 0]:
         errors.append("Validation Failed: Doom Speed mu must be < Casual Speed mu")
@@ -1064,18 +1072,27 @@ def run_inference_on_latest(new_session_csv_path: str, model_state_path: str) ->
     path, doom_prob, gamma = model.process_session(session_df, baseline, detector, prev_gamma)
     
     gap_hr = session_df['TimeSinceLastSessionMin'].iloc[0] / 60.0 if 'TimeSinceLastSessionMin' in session_df else 2.0
-    scorer.score(session_df, baseline, gap_hr)
+    scorer_result = scorer.score(session_df, baseline, gap_hr)
     
     save_full_state(model_state_path, model, baseline, detector, gamma)
     
     confidence = float(model.compute_model_confidence())
-    label = "DOOMSCROLLING" if doom_prob[1] > 0.65 else "CASUAL"
+    label = "DOOMSCROLLING" if doom_prob > 0.65 else "CASUAL"
     
     return {
-        "doom_score": float(doom_prob[1]),
+        "doom_score": float(doom_prob),
         "doom_label": label,
-        "model_confidence": confidence
+        "model_confidence": confidence,
+        "heuristic_score": scorer_result.get('doom_score', 0.0),
+        "heuristic_label": scorer_result.get('label', 'CASUAL'),
+        "heuristic_components": scorer_result.get('components', {})
     }
+def make_session_key(row):
+    try:
+        date_part = str(row['StartTime']).split(' ')[0]  # "2026-02-25"
+    except:
+        date_part = "unknown"
+    return f"{date_part}__{row['SessionNum']}"
 
 def run_full_pipeline(csv_path: str, state_path: str = None) -> ReelioCLSE:
     import pandas as pd
@@ -1086,10 +1103,14 @@ def run_full_pipeline(csv_path: str, state_path: str = None) -> ReelioCLSE:
     detector = RegimeDetector()
     scorer = DoomScorer()
     
-    sessions = df.groupby('SessionNum')
+    df['_session_key'] = df.apply(make_session_key, axis=1)
+    session_list = sorted(
+        df.groupby('_session_key'),
+        key=lambda x: x[1]['StartTime'].iloc[0]
+    )
     prev_gamma = None
     
-    for sess_id, s_df in sessions:
+    for sess_id, s_df in session_list:
         s_df = preprocess_session(s_df)
         if len(s_df) < 2:
             continue
@@ -1136,14 +1157,18 @@ def run_dashboard_payload(csv_data: str, state_path: str = None) -> str:
     if 'SessionNum' not in df.columns:
         return json.dumps({"error": "Schema missing SessionNum", "sessions": []})
         
-    sessions = df.groupby('SessionNum')
+    df['_session_key'] = df.apply(make_session_key, axis=1)
+    session_list = sorted(
+        df.groupby('_session_key'),
+        key=lambda x: x[1]['StartTime'].iloc[0]
+    )
     prev_gamma = None
     
     results = []
     p_capture_timeline = []
     session_circadian = []
     
-    for sess_id, s_df in sessions:
+    for sess_id, s_df in session_list:
         try:
             s_df = preprocess_session(s_df.copy())
             if len(s_df) < 2:
@@ -1155,7 +1180,7 @@ def run_dashboard_payload(csv_data: str, state_path: str = None) -> str:
             mean_gamma_1 = float(np.mean(gamma[:, 1]))
             dom_state = 1 if mean_gamma_1 > 0.5 else 0
             
-            time_period = s_df['TimeOfDayCategory'].iloc[0] if 'TimeOfDayCategory' in s_df.columns else "Unknown"
+            time_period = s_df['TimePeriod'].iloc[0] if 'TimePeriod' in s_df.columns else "Unknown"
             
             if 'SessionStart' in s_df.columns:
                 date_str = pd.to_datetime(s_df['SessionStart'], unit='ms').dt.strftime('%m-%d').iloc[0]
@@ -1165,7 +1190,7 @@ def run_dashboard_payload(csv_data: str, state_path: str = None) -> str:
             avg_dwell = float(s_df['DwellTime'].mean()) if 'DwellTime' in s_df.columns else float(np.exp(s_df['log_dwell']).mean())
             
             results.append({
-                "sessionNum": int(sess_id),
+                "sessionNum": str(sess_id),
                 "S_t": mean_gamma_1,
                 "dominantState": dom_state,
                 "nReels": len(s_df),
@@ -1191,15 +1216,19 @@ def run_dashboard_payload(csv_data: str, state_path: str = None) -> str:
     # Aggregate actuals into the 12 2-hour buckets expected by the React CircadianMap frontend
     df_circ = pd.DataFrame(session_circadian) if session_circadian else pd.DataFrame(columns=['h', 'doom'])
     circadian_map = []
-    baseline_curve = [0.72, 0.75, 0.81, 0.7, 0.62, 0.4, 0.21, 0.19, 0.18, 0.2, 0.24, 0.3, 0.38, 0.4, 0.44, 0.4, 0.35, 0.45, 0.58, 0.65, 0.76, 0.82, 0.89, 0.8]
-    
+    # AFTER — uses personal average as neutral fallback for unobserved hours:
+    personal_avg_doom = float(df_circ['doom'].mean()) if len(df_circ) > 0 else 0.5
+
     for h in range(0, 24, 2):
-        # We merge the hour and the next hour natively to smooth the 12-point AreaChart graph curve 
         mask = df_circ['h'].isin([h, h+1])
         if len(df_circ) > 0 and mask.any():
+            # Real data exists for this bucket — use it
             val = float(df_circ[mask]['doom'].mean())
         else:
-            val = baseline_curve[h]
+            # No sessions recorded in this time window.
+            # Use the user's personal average doom as a neutral prior,
+            # NOT a hardcoded baseline that fabricates risk for unobserved hours.
+            val = personal_avg_doom
         circadian_map.append({'h': f"{h:02d}", 'doom': round(val, 2)})
         
     output_payload = {

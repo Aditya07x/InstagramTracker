@@ -356,16 +356,13 @@ const HomeScreen = ({ onNav, SESSION, LIVE, isServiceActive }) => {
                 {/* Metrics row */}
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", borderTop: `1px solid ${D.border}` }}>
                     {[
-                        { label: "Reels", value: LIVE.reels },
-                        { label: "Time", value: LIVE.duration },
-                        { label: "Avg Dwell", value: `${LIVE.avg_dwell}s` },
-                    ].map(({ label, value }, i) => (
-                        <div key={label} style={{
-                            padding: "12px 10px", textAlign: "center",
-                            borderRight: i < 2 ? `1px solid ${D.border}` : "none",
-                        }}>
-                            <Label style={{ fontSize: 9, display: "block", marginBottom: 4 }}>{label}</Label>
-                            <div className="spacemono" style={{ fontSize: 20, fontWeight: 700, color: "#fff" }}>{value}</div>
+                        { label: "Total Sessions", value: SESSION.sessions_today },
+                        { label: "Doom Sessions", value: SESSION.total_doom_sessions },
+                        { label: "Interactions", value: SESSION.total_interactions }
+                    ].map((item, i) => (
+                        <div key={item.label} style={{ padding: "12px 10px", textAlign: "center", borderRight: i < 2 ? `1px solid ${D.border}` : "none" }}>
+                            <Label style={{ fontSize: 9, display: "block", marginBottom: 4 }}>{item.label}</Label>
+                            <div className="spacemono" style={{ fontSize: 20, fontWeight: 700, color: "#fff" }}>{item.value}</div>
                         </div>
                     ))}
                 </div>
@@ -465,29 +462,10 @@ const HomeScreen = ({ onNav, SESSION, LIVE, isServiceActive }) => {
                 ))}
             </div>
 
-            {/* ── CTA ── */}
             <button className="btn-primary" onClick={() => onNav("dashboard")}>
                 View Behavioral Dashboard
                 <ChevronRight size={18} style={{ display: "inline", marginLeft: 6, verticalAlign: "middle" }} />
             </button>
-
-            <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 20, marginTop: 20 }}>
-                <button onClick={() => window.Android?.exportCsv()} style={{
-                    background: "none", border: "none", cursor: "pointer",
-                    display: "flex", alignItems: "center", gap: 6,
-                    color: D.muted, fontFamily: "Space Grotesk", fontSize: 13,
-                }}>
-                    <Download size={13} /> Export CSV
-                </button>
-                <div style={{ width: 4, height: 4, borderRadius: "50%", background: D.muted }} />
-                <button onClick={() => window.Android?.clearData()} style={{
-                    background: "none", border: "none", cursor: "pointer",
-                    display: "flex", alignItems: "center", gap: 6,
-                    color: D.doom + "99", fontFamily: "Space Grotesk", fontSize: 13,
-                }}>
-                    <Trash2 size={13} /> Clear Data
-                </button>
-            </div>
         </div>
     );
 };
@@ -840,6 +818,119 @@ const DashboardScreen = ({ SESSION, REELS_DATA, DAYS_14 }) => {
     );
 };
 
+/* ─── SETTINGS SCREEN ───────────────────────────────────────────── */
+const SettingsScreen = ({ onNav }) => {
+    const [surveyProb, setSurveyProb] = useState(0.3);
+    const [sleepStart, setSleepStart] = useState(23);
+    const [sleepEnd, setSleepEnd] = useState(7);
+
+    useEffect(() => {
+        if (window.Android) {
+            setSurveyProb(window.Android.getSurveyFrequency());
+            const sleepStr = window.Android.getSleepSchedule();
+            const [s, e] = sleepStr.split(",").map(Number);
+            setSleepStart(s);
+            setSleepEnd(e);
+        }
+    }, []);
+
+    const handleSurveyChange = (e) => {
+        const val = parseFloat(e.target.value);
+        setSurveyProb(val);
+        window.Android?.setSurveyFrequency(val);
+    };
+
+    const handleSleepChange = (type, val) => {
+        const v = parseInt(val, 10);
+        if (type === "start") {
+            setSleepStart(v);
+            window.Android?.setSleepSchedule(v, sleepEnd);
+        } else {
+            setSleepEnd(v);
+            window.Android?.setSleepSchedule(sleepStart, v);
+        }
+    };
+
+    return (
+        <div className="slide-up" style={{ padding: "16px 16px 32px", position: "relative", zIndex: 1 }}>
+
+            <div style={{ display: "flex", alignItems: "center", marginBottom: 20, padding: "14px 4px 0" }}>
+                <Settings size={20} color={D.safe} style={{ filter: `drop-shadow(0 0 6px ${D.safe})`, marginRight: 10 }} />
+                <div style={{ fontSize: 16, fontWeight: 700, color: "#fff", letterSpacing: "0.05em" }}>SYSTEM PREFERENCES</div>
+            </div>
+
+            <div className="card" style={{ padding: "16px", marginBottom: 16 }}>
+                <Label style={{ display: "block", marginBottom: 16, color: D.safe }}>Micro-Probe Calibration</Label>
+                <div style={{ fontSize: 12, color: D.text, marginBottom: 16, lineHeight: 1.5 }}>
+                    Adjust the frequency of active psychological surveys deployed during sessions. Lower frequencies may reduce model confidence accuracy.
+                </div>
+
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+                    <span className="mono" style={{ fontSize: 11, color: surveyProb === 0 ? D.muted : D.safe }}>{surveyProb === 0 ? "OFF" : surveyProb < 0.2 ? "LOW" : surveyProb < 0.6 ? "STANDARD" : "AGGRESSIVE"}</span>
+                    <span className="mono" style={{ fontSize: 11, color: D.text }}>{Math.round(surveyProb * 100)}%</span>
+                </div>
+                <input type="range" min="0" max="1" step="0.1" value={surveyProb} onChange={handleSurveyChange}
+                    style={{
+                        width: "100%", height: 3, background: "rgba(13,223,242,0.2)", borderRadius: 2, appearance: "none", outline: "none",
+                        accentColor: D.safe, marginTop: 4, marginBottom: 4
+                    }}
+                />
+            </div>
+
+            <div className="card" style={{ padding: "16px", marginBottom: 16 }}>
+                <Label style={{ display: "block", marginBottom: 16, color: D.violet }}>Sleep Proximity Model</Label>
+                <div style={{ fontSize: 12, color: D.text, marginBottom: 16, lineHeight: 1.5 }}>
+                    Define typical sleep boundaries to calibrate ALSE circadian capture penalties. Activity inside these boundaries aggressively flags as 'Doom'.
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                    <div>
+                        <Label style={{ fontSize: 9, display: "block", marginBottom: 6 }}>Bedtime Hour</Label>
+                        <select value={sleepStart} onChange={(e) => handleSleepChange("start", e.target.value)}
+                            style={{
+                                width: "100%", padding: "10px", background: "rgba(0,0,0,0.5)", border: `1px solid ${D.border}`,
+                                color: "#fff", borderRadius: 8, fontFamily: "Space Mono", fontSize: 14, outline: "none", cursor: "pointer"
+                            }}>
+                            {Array.from({ length: 24 }, (_, i) => (
+                                <option key={i} value={i}>{i.toString().padStart(2, '0')}:00</option>
+                            ))}
+                        </select>
+                    </div>
+                    <div>
+                        <Label style={{ fontSize: 9, display: "block", marginBottom: 6 }}>Wake-up Hour</Label>
+                        <select value={sleepEnd} onChange={(e) => handleSleepChange("end", e.target.value)}
+                            style={{
+                                width: "100%", padding: "10px", background: "rgba(0,0,0,0.5)", border: `1px solid ${D.border}`,
+                                color: "#fff", borderRadius: 8, fontFamily: "Space Mono", fontSize: 14, outline: "none", cursor: "pointer"
+                            }}>
+                            {Array.from({ length: 24 }, (_, i) => (
+                                <option key={i} value={i}>{i.toString().padStart(2, '0')}:00</option>
+                            ))}
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <div className="card card-danger" style={{ padding: "16px", marginBottom: 16 }}>
+                <Label style={{ display: "block", marginBottom: 16, color: D.doom }}>Data Management</Label>
+                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                    <button className="btn-primary" onClick={() => window.Android?.exportCsv()} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, background: `linear-gradient(135deg, ${D.muted}, #1a2436)`, color: "#fff", padding: "14px" }}>
+                        <Download size={15} /> Export Behavioral Baseline
+                    </button>
+                    <button className="btn-primary" onClick={() => window.Android?.clearData()} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, background: `linear-gradient(135deg, ${D.doomMag}, #7a0854)`, color: "#fff", padding: "14px", boxShadow: `0 8px 32px ${D.doomMag}33` }}>
+                        <Trash2 size={15} /> Flush Tracking Data
+                    </button>
+                </div>
+            </div>
+
+            <div style={{ textAlign: "center", marginTop: 24, marginBottom: 8 }}>
+                <div className="mono" style={{ fontSize: 10, color: D.muted, letterSpacing: "0.15em" }}>ALSE ENGINE CONFIGURATION</div>
+                <div className="mono" style={{ fontSize: 9, color: D.muted, marginTop: 4 }}>v3.0 INTEGRATION</div>
+            </div>
+        </div>
+    );
+};
+
 /* ─── APP SHELL ─────────────────────────────────────────────────── */
 export default function ReeliApp() {
     const [screen, setScreen] = useState("home");
@@ -906,6 +997,8 @@ export default function ReeliApp() {
         regime_stability: 1.0 / (1.0 - A[1][1] + 0.001),
         regime_alert: mostRecentSession.S_t > (avgSt + 0.2),
         sessions_today: rawData.sessions.length,
+        total_doom_sessions: rawData.sessions.filter(s => s.S_t > 0.65).length,
+        total_interactions: rawData.sessions.reduce((acc, s) => acc + (s.likes || 0) + (s.comments || 0) + (s.shares || 0) + (s.saves || 0), 0),
         total_dwell_today_min: (rawData.sessions.length * 5),
         A: A,
         q_01: 0.31, q_10: 0.13, h: [0.156, 0.037],
@@ -969,10 +1062,10 @@ export default function ReeliApp() {
                 </div>
 
                 {/* Scrollable content */}
-                <div style={{ overflowY: "auto", maxHeight: "calc(100vh - 44px - 56px)" }}>
-                    {screen === "home"
-                        ? <HomeScreen onNav={setScreen} SESSION={derivedSession} LIVE={derivedLive} isServiceActive={isServiceActive} />
-                        : <DashboardScreen SESSION={derivedSession} REELS_DATA={timelineData} DAYS_14={mockDays} />}
+                <div style={{ overflowY: "auto", height: "calc(100vh - 44px - 56px)" }}>
+                    {screen === "home" ? <HomeScreen onNav={setScreen} SESSION={derivedSession} LIVE={derivedLive} isServiceActive={isServiceActive} />
+                        : screen === "dashboard" ? <DashboardScreen SESSION={derivedSession} REELS_DATA={timelineData} DAYS_14={mockDays} />
+                            : <SettingsScreen onNav={setScreen} />}
                 </div>
 
                 {/* Tab bar */}
@@ -983,7 +1076,7 @@ export default function ReeliApp() {
                         { id: "settings", icon: Settings, label: "Settings" },
                     ].map(({ id, icon: Icon, label }) => (
                         <button key={id} className={`tab-item ${screen === id ? "active" : ""}`}
-                            onClick={() => setScreen(id === "settings" ? "home" : id)}>
+                            onClick={() => setScreen(id)}>
                             <Icon size={20} />
                             <span>{label}</span>
                         </button>

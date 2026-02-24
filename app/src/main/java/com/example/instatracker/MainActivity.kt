@@ -215,21 +215,25 @@ class MainActivity : ComponentActivity() {
 
         @JavascriptInterface
         fun enableAccessibility() {
-            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            handler.post {
+                startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            }
         }
 
         @JavascriptInterface
         fun exportCsv() {
-            val file = File(filesDir, "insta_data.csv")
-            if (!file.exists()) return
+            handler.post {
+                val file = File(filesDir, "insta_data.csv")
+                if (!file.exists()) return@post
 
-            val uri: Uri = FileProvider.getUriForFile(mContext, "${packageName}.fileprovider", file)
-            val intent = Intent(Intent.ACTION_SEND).apply {
-                type = "text/csv"
-                putExtra(Intent.EXTRA_STREAM, uri as android.os.Parcelable)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                val uri: Uri = FileProvider.getUriForFile(mContext, "${packageName}.fileprovider", file)
+                val intent = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/csv"
+                    putExtra(Intent.EXTRA_STREAM, uri as android.os.Parcelable)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                startActivity(Intent.createChooser(intent, "Share Behavioral Baseline Data"))
             }
-            startActivity(Intent.createChooser(intent, "Share Behavioral Baseline Data"))
         }
 
         @JavascriptInterface
@@ -248,6 +252,35 @@ class MainActivity : ComponentActivity() {
                     .setNeutralButton("Cancel", null)
                     .show()
             }
+        }
+
+        @JavascriptInterface
+        fun setSurveyFrequency(prob: Float) {
+            mContext.getSharedPreferences("InstaTrackerPrefs", Context.MODE_PRIVATE)
+                .edit().putFloat("survey_probability", prob).apply()
+        }
+
+        @JavascriptInterface
+        fun getSurveyFrequency(): Float {
+            return mContext.getSharedPreferences("InstaTrackerPrefs", Context.MODE_PRIVATE)
+                .getFloat("survey_probability", 0.30f)
+        }
+
+        @JavascriptInterface
+        fun setSleepSchedule(startHour: Int, endHour: Int) {
+            mContext.getSharedPreferences("InstaTrackerPrefs", Context.MODE_PRIVATE)
+                .edit()
+                .putInt("sleep_start_hour", startHour)
+                .putInt("sleep_end_hour", endHour)
+                .apply()
+        }
+
+        @JavascriptInterface
+        fun getSleepSchedule(): String {
+            val prefs = mContext.getSharedPreferences("InstaTrackerPrefs", Context.MODE_PRIVATE)
+            val start = prefs.getInt("sleep_start_hour", 23) // default 11 PM
+            val end = prefs.getInt("sleep_end_hour", 7)      // default 7 AM
+            return "$start,$end"
         }
     }
 }

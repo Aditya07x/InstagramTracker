@@ -1,6 +1,7 @@
 package com.example.instatracker
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Context
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
@@ -200,18 +201,40 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-        sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
-        accelSensor = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
-        lightSensor = sensorManager.getDefaultSensor(Sensor.TYPE_LIGHT)
+        val info = AccessibilityServiceInfo()
+        info.eventTypes = AccessibilityEvent.TYPE_VIEW_SCROLLED or AccessibilityEvent.TYPE_VIEW_CLICKED
+        info.feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
+        serviceInfo = info
+        lastActiveTime = System.currentTimeMillis()
         
-        ensureCsvHeader()
         createNotificationChannel()
+        ensureCsvHeader()
+        
+        // Force HMM cold start on next initialization because prior model arrays were corrupted
+        try {
+            val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val stateWiped = prefs.getBoolean("alse_state_wiped_v3", false)
+            
+            if (!stateWiped) {
+                val stateFile = File(filesDir, "alse_model_state.json")
+                if (stateFile.exists()) {
+                    stateFile.delete()
+                    android.util.Log.d("InstaTracker", "Deleted corrupted alse_model_state.json")
+                }
+                prefs.edit().putBoolean("alse_state_wiped_v3", true).apply()
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("InstaTracker", "Failed to delete old model state", e)
+        }
+        
+        sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (event == null) return
-        val now = System.currentTimeMillis()
-        val packageName = event.packageName?.toString() ?: ""
+        try {
+            if (event == null) return
+            val now = System.currentTimeMillis()
+            val packageName = event.packageName?.toString() ?: ""
         
         if (packageName != "com.instagram.android") {
             if (sessionStartTime != null) {
@@ -328,6 +351,9 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
                 if (lastReelStartTime != 0L) processPreviousReel(now)
                 startNextReel(now)
             }
+        }
+        } catch (e: Exception) {
+            android.util.Log.e("InstaTracker", "Handled exception in accessibility loop: ${e.localizedMessage}")
         }
     }
     
@@ -617,13 +643,23 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
             longestSessionTodayReels = 0
             morningSessionExists = false
             
-            // Calculate sleep proxy using user-defined heuristic (after 09:00 vs before 06:00)
-            if (circadianPhase > 0.375f) { // After 09:00
-                sleepProxyScore = 1.0f 
-            } else if (circadianPhase < 0.25f) { // Before 06:00
+            // Calculate sleep proxy using user-defined heuristic
+            val sleepStart = prefs.getInt("sleep_start_hour", 23)
+            val sleepEnd = prefs.getInt("sleep_end_hour", 7)
+            
+            val phaseStart = sleepStart / 24f
+            val phaseEnd = sleepEnd / 24f
+            
+            val isSleeping = if (sleepStart > sleepEnd) {
+                circadianPhase >= phaseStart || circadianPhase <= phaseEnd
+            } else {
+                circadianPhase >= phaseStart && circadianPhase <= phaseEnd
+            }
+            
+            if (isSleeping) {
                 sleepProxyScore = 0.0f
             } else {
-                sleepProxyScore = 0.5f // Gray area (06:00 - 09:00)
+                sleepProxyScore = 1.0f
             }
             
             // Log this time of day for consistency score
@@ -649,9 +685,25 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
             timeSinceLastSessionMin = -1
         }
         
-        // --- Layer 8: Trigger Pre-Session IntentionProbe ---
-        showIntentionPrompt()
-        // ---------------------------------------------------
+        // --- Layer 8: Trigger Probabilistic Paired Surveys ---
+        val surveyProb = prefs.getFloat("survey_probability", 0.30f)
+        val isSurveySession = Math.random() < surveyProb
+        prefs.edit()
+            .putBoolean("is_survey_session", isSurveySession)
+            // Zero-out all survey variables at start so dismissals default to 0 cleanly
+            .putInt("current_mood_before", 0)
+            .putString("current_intended_action", "")
+            .putInt("probe_post_rating", 0)
+            .putInt("probe_regret_score", 0)
+            .putInt("probe_mood_after", 0)
+            .putInt("probe_mood_delta", 0)
+            .putInt("probe_actual_vs_intended", 0)
+            .apply()
+            
+        if (isSurveySession) {
+            showIntentionPrompt()
+        }
+        // -----------------------------------------------------
         
         currentSessionNumber = if (today != lastDate) 1 else prefs.getInt(KEY_SESSION_NUM, 0) + 1
         prefs.edit().putInt(KEY_SESSION_NUM, currentSessionNumber).putString("last_session_date", today).apply()
@@ -790,37 +842,43 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
     }
 
     private fun endCurrentSession(endTime: Long) {
-        if (sessionStartTime == null) return
-        if (lastReelStartTime != 0L && endTime > lastReelStartTime) processPreviousReel(endTime)
-        
-        // --- Layer 8: Trigger Post-Session MicroProbe ---
-        showSurveyPrompt()
-        // ------------------------------------------------
-        
-        sensorManager.unregisterListener(this)
-        
-        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        
-        val dwellMin = ((endTime - (sessionStartTime ?: endTime)) / 60000f).toFloat()
-        totalDwellTodayMin += dwellMin
-        if (reelCount > longestSessionTodayReels) longestSessionTodayReels = reelCount
-        if (getTimePeriod() == "Morning") morningSessionExists = true
-        
-        prefs.edit()
-            .putLong("last_session_end", endTime)
-            .putInt("sessions_today", sessionsToday)
-            .putFloat("total_dwell_today", totalDwellTodayMin)
-            .putInt("longest_session_today", longestSessionTodayReels)
-            .putBoolean("morning_session_exists", morningSessionExists)
-            .apply()
+        try {
+            if (sessionStartTime == null) return
+            if (lastReelStartTime != 0L && endTime > lastReelStartTime) processPreviousReel(endTime)
             
-        injectSessionToDatabase(sessionStartTime!!, endTime)
-        
-        sessionStartTime = null
-        reelCount = 0
-        dwellWindow.clear()
-        
-        lastReelStartTime = 0L // prevent triggering after timeout
+            val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            
+            // --- Layer 8: Trigger Post-Session MicroProbe ---
+            if (prefs.getBoolean("is_survey_session", false)) {
+                showSurveyPrompt()
+            }
+            // ------------------------------------------------
+            
+            sensorManager.unregisterListener(this)
+            
+            val dwellMin = ((endTime - (sessionStartTime ?: endTime)) / 60000f).toFloat()
+            totalDwellTodayMin += dwellMin
+            if (reelCount > longestSessionTodayReels) longestSessionTodayReels = reelCount
+            if (getTimePeriod() == "Morning") morningSessionExists = true
+            
+            prefs.edit()
+                .putLong("last_session_end", endTime)
+                .putInt("sessions_today", sessionsToday)
+                .putFloat("total_dwell_today", totalDwellTodayMin)
+                .putInt("longest_session_today", longestSessionTodayReels)
+                .putBoolean("morning_session_exists", morningSessionExists)
+                .apply()
+                
+            injectSessionToDatabase(sessionStartTime!!, endTime)
+            
+            sessionStartTime = null
+            reelCount = 0
+            dwellWindow.clear()
+            
+            lastReelStartTime = 0L // prevent triggering after timeout
+        } catch (e: Exception) {
+            android.util.Log.e("InstaTracker", "Exception in endCurrentSession", e)
+        }
     }
     
     private fun injectSessionToDatabase(startTime: Long, endTime: Long) {
@@ -845,77 +903,90 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
         val sProxy = sleepProxyScore
         val constSc = consistencyScore
         
-        val rat = microprobeResults[0] as Int
-        val act = microprobeResults[1] as String
-        val mat = (microprobeResults[2] as Int) == 1
-        val reg = microprobeResults[3] as Int
-        val mBf = microprobeResults[4] as Int
-        val mAf = microprobeResults[5] as Int
-        val mDl = microprobeResults[6] as Int
+        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val rat = prefs.getInt("probe_post_rating", 0)
+        val act = prefs.getString("current_intended_action", "") ?: ""
+        
+        // Dummy check for actual vs intended match
+        val calculatedMatch = if (act == "Killing Time") 1 else 0
+        prefs.edit().putInt("probe_actual_vs_intended", calculatedMatch).apply()
+        val mat = calculatedMatch == 1
+        val reg = prefs.getInt("probe_regret_score", 0)
+        val mBf = prefs.getInt("current_mood_before", 0)
+        val mAf = prefs.getInt("probe_mood_after", 0)
+        
+        // Explicit calculation preventing zero-out bugs
+        val calculatedMoodDelta = if (mBf != 0 && mAf != 0) (mAf - mBf) else 0
+        prefs.edit().putInt("probe_mood_delta", calculatedMoodDelta).apply()
+        val mDl = calculatedMoodDelta
 
         CoroutineScope(Dispatchers.IO).launch {
-            var doomScore = 0f
-            var doomLabel = "UNSCORED"
-            var modelConf = 0f
-            
             try {
-                if (!Python.isStarted()) {
-                    Python.start(AndroidPlatform(this@InstaAccessibilityService))
+                var doomScore = 0f
+                var doomLabel = "UNSCORED"
+                var modelConf = 0f
+                
+                try {
+                    if (!Python.isStarted()) {
+                        Python.start(AndroidPlatform(this@InstaAccessibilityService))
+                    }
+                    val py = Python.getInstance()
+                    val reelioModule = py.getModule("reelio_alse")
+                    
+                    val csvPath = File(filesDir, "insta_data.csv").absolutePath
+                    val statePath = File(filesDir, "alse_model_state.json").absolutePath
+                    
+                    val result = reelioModule.callAttr("run_inference_on_latest", csvPath, statePath)
+                    val resultMap = result.asMap()
+                    
+                    val scoreObj = resultMap[py.getBuiltins().callAttr("str", "doom_score")]
+                    if (scoreObj != null) doomScore = scoreObj.toFloat()
+                    
+                    val labelObj = resultMap[py.getBuiltins().callAttr("str", "doom_label")]
+                    if (labelObj != null) doomLabel = labelObj.toString()
+                    
+                    val confObj = resultMap[py.getBuiltins().callAttr("str", "model_confidence")]
+                    if (confObj != null) modelConf = confObj.toFloat()
+                    
+                    android.util.Log.d("ALSE", "HMM Result: label=$doomLabel score=$doomScore conf=$modelConf")
+                } catch (e: Exception) {
+                    android.util.Log.e("ALSE", "Python inference failed: ${e.message}")
+                    doomScore = computeKotlinFallbackScore()
+                    doomLabel = "UNSCORED"
+                    modelConf = 0.0f
                 }
-                val py = Python.getInstance()
-                val reelioModule = py.getModule("reelio_alse")
                 
-                val csvPath = File(getExternalFilesDir(null), "insta_data.csv").absolutePath
-                val statePath = File(getExternalFilesDir(null), "alse_model_state.json").absolutePath
-                
-                val result = reelioModule.callAttr("run_inference_on_latest", csvPath, statePath)
-                val resultMap = result.asMap()
-                
-                val scoreObj = resultMap[py.getBuiltins().callAttr("str", "doom_score")]
-                if (scoreObj != null) doomScore = scoreObj.toFloat()
-                
-                val labelObj = resultMap[py.getBuiltins().callAttr("str", "doom_label")]
-                if (labelObj != null) doomLabel = labelObj.toString()
-                
-                val confObj = resultMap[py.getBuiltins().callAttr("str", "model_confidence")]
-                if (confObj != null) modelConf = confObj.toFloat()
-                
-                Log.d("ALSE", "HMM Result: label=\$doomLabel score=\$doomScore conf=\$modelConf")
+                val db = DatabaseProvider.getDatabase(this@InstaAccessibilityService)
+                val dbSession = SessionEntity(
+                    sessionId = UUID.randomUUID().toString(),
+                    sessionStart = sTime,
+                    sessionEnd = eTime,
+                    durationSeconds = durSec,
+                    timeOfDayCategory = timeCat,
+                    isLateNight = isLate,
+                    totalScrolls = tScrolls,
+                    maxReelStreak = mReelSt,
+                    burstCount = 0,
+                    scrollsPerMinute = 0f,
+                    likeCount = 0, commentClickCount = 0, shareCount = 0, immersionScore = 0f,
+                    totalReelsViewed = rCount, avgReelExposure = 0f, maxReelExposure = 0f,
+                    meanScrollInterval = mInterval, scrollIntervalVariance = 0f,
+                    peakAcceleration = peakAccel, velocityProxy = 0f, maxVelocityProxy = 0f,
+                    avgBurstDuration = maxBurst, maxBurstDuration = maxBurst,
+                    // Layer 4
+                    sessionDwellTrend = 0f, earlyVsLateRatio = 0f, interactionRate = 0f, interactionDropoff = 0f, scrollIntervalCV = 0f, scrollRhythmEntropy = 0f,
+                    // Layer 5
+                    sessionsToday = sToday, totalDwellTodayMin = totDwell, longestSessionTodayReels = mReelSt,
+                    lastSessionDoomScore = doomScore, rollingDoomRate7d = 0f, doomStreakLength = doomSt, morningSessionExists = mSession,
+                    // Layer 6
+                    circadianPhase = cPhase, sleepProxyScore = sProxy, estimatedSleepDurationH = 0f, consistencyScore = constSc,
+                    // Layer 8
+                    postSessionRating = rat, intendedAction = act, actualVsIntendedMatch = mat, regretScore = reg, moodBefore = mBf, moodAfter = mAf, moodDelta = mDl
+                )
+                db.sessionDao().insert(dbSession)
             } catch (e: Exception) {
-                Log.e("ALSE", "Python inference failed: \${e.message}")
-                doomScore = computeKotlinFallbackScore()
-                doomLabel = "UNSCORED"
-                modelConf = 0.0f
+                android.util.Log.e("InstaTracker", "Exception in Database Injector Coroutine", e)
             }
-            
-            val db = DatabaseProvider.getDatabase(this@InstaAccessibilityService)
-            val dbSession = SessionEntity(
-                sessionId = UUID.randomUUID().toString(),
-                sessionStart = sTime,
-                sessionEnd = eTime,
-                durationSeconds = durSec,
-                timeOfDayCategory = timeCat,
-                isLateNight = isLate,
-                totalScrolls = tScrolls,
-                maxReelStreak = mReelSt,
-                burstCount = 0,
-                scrollsPerMinute = 0f,
-                likeCount = 0, commentClickCount = 0, shareCount = 0, immersionScore = 0f,
-                totalReelsViewed = rCount, avgReelExposure = 0f, maxReelExposure = 0f,
-                meanScrollInterval = mInterval, scrollIntervalVariance = 0f,
-                peakAcceleration = peakAccel, velocityProxy = 0f, maxVelocityProxy = 0f,
-                avgBurstDuration = maxBurst, maxBurstDuration = maxBurst,
-                // Layer 4
-                sessionDwellTrend = 0f, earlyVsLateRatio = 0f, interactionRate = 0f, interactionDropoff = 0f, scrollIntervalCV = 0f, scrollRhythmEntropy = 0f,
-                // Layer 5
-                sessionsToday = sToday, totalDwellTodayMin = totDwell, longestSessionTodayReels = mReelSt,
-                lastSessionDoomScore = doomScore, rollingDoomRate7d = 0f, doomStreakLength = doomSt, morningSessionExists = mSession,
-                // Layer 6
-                circadianPhase = cPhase, sleepProxyScore = sProxy, estimatedSleepDurationH = 0f, consistencyScore = constSc,
-                // Layer 8
-                postSessionRating = rat, intendedAction = act, actualVsIntendedMatch = mat, regretScore = reg, moodBefore = mBf, moodAfter = mAf, moodDelta = mDl
-            )
-            db.sessionDao().insert(dbSession)
         }
     }
     
@@ -926,10 +997,6 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
     }
 
     private fun showSurveyPrompt() {
-        if (Math.random() > 0.30) {
-            Log.d("InstaTracker", "Skipping post-session survey prompt (Randomized Gate)")
-            return
-        }
         val intent = Intent(this, MicroProbeActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
         }
@@ -948,10 +1015,6 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
     }
     
     private fun showIntentionPrompt() {
-        if (Math.random() > 0.30) {
-            Log.d("InstaTracker", "Skipping pre-session intention prompt (Randomized Gate)")
-            return
-        }
         val intent = Intent(this, com.example.instatracker.IntentionProbeActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
         }

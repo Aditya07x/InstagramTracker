@@ -93,12 +93,11 @@ class DashboardActivity : ComponentActivity() {
                     val csvFile  = File(filesDir, "insta_data.csv")
 
                     val jsonContent: String = when {
-                        hmmFile.exists() && hmmFile.length() > 10 && (!csvFile.exists() || hmmFile.lastModified() >= csvFile.lastModified()) -> {
+                        hmmFile.exists() && hmmFile.length() > 10 && isCacheValid(hmmFile, csvFile) -> {
                             android.util.Log.d("ReactDashboard", "Loading pre-computed HMM JSON (${hmmFile.length()} bytes)")
                             hmmFile.readText(Charsets.UTF_8)
                         }
                         csvFile.exists() -> {
-                            // ── Fallback: run HMM on the fly via Chaquopy ─────────
                             android.util.Log.d("ReactDashboard", "Running HMM inference on CSV…")
                             if (!Python.isStarted()) {
                                 Python.start(AndroidPlatform(this@DashboardActivity))
@@ -107,7 +106,7 @@ class DashboardActivity : ComponentActivity() {
                             val py = Python.getInstance()
                             val hmmModule = py.getModule("reelio_alse")
                             val result = hmmModule.callAttr("run_dashboard_payload", csvContent).toString()
-                            // Cache it for next time
+                            // Cache the fresh result
                             hmmFile.writeText(result)
                             result
                         }
@@ -157,6 +156,39 @@ class DashboardActivity : ComponentActivity() {
         }
 
         handler.postDelayed(injectionRunnable!!, 250)
+    }
+
+    private fun isCacheValid(hmmFile: File, csvFile: File): Boolean {
+        // 1. Cache must be newer than CSV
+        if (csvFile.exists() && hmmFile.lastModified() < csvFile.lastModified()) {
+            android.util.Log.d("ReactDashboard", "Cache stale: CSV is newer, forcing recompute")
+            return false
+        }
+        // 2. Cache must contain circadian key with non-empty data
+        return try {
+            val text = hmmFile.readText(Charsets.UTF_8)
+
+            // Check key exists at all
+            if (!text.contains("\"circadian\"")) {
+                android.util.Log.d("ReactDashboard", "Cache missing circadian key, forcing recompute")
+                hmmFile.delete()
+                return false
+            }
+
+            // Check circadian value is not empty — reject: "circadian": [] or "circadian": {}
+            val emptyCircadian = Regex("\"circadian\"\\s*:\\s*[\\[{]\\s*[\\]|}]")
+            if (emptyCircadian.containsMatchIn(text)) {
+                android.util.Log.d("ReactDashboard", "Cache has empty circadian array, forcing recompute")
+                hmmFile.delete()
+                return false
+            }
+
+            android.util.Log.d("ReactDashboard", "Cache valid with circadian data")
+            true
+        } catch (e: Exception) {
+            android.util.Log.e("ReactDashboard", "Cache read error: ${e.message}")
+            false
+        }
     }
 
     // New helper to inject error state directly to React
