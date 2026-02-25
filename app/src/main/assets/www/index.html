@@ -154,6 +154,12 @@
       }
     }
 
+    @keyframes spin-reverse {
+      to {
+        transform: rotate(-360deg)
+      }
+    }
+
     @keyframes ping-slow {
 
       0%,
@@ -256,7 +262,7 @@
     }
 
     ::-webkit-scrollbar-thumb {
-      background: #3D4F6B;
+      background: #8899AA;
       border-radius: 2px
     }
 
@@ -321,7 +327,7 @@
       cursor: pointer;
       border: none;
       background: transparent;
-      color: #3D4F6B;
+      color: #8899AA;
       font-family: 'Space Grotesk';
       font-size: 10px;
       font-weight: 600;
@@ -392,7 +398,7 @@
       <div
         style="width:40px;height:40px;border:3px solid rgba(13,223,242,0.15);border-top-color:#0ddff2;border-radius:50%;animation:spin .8s linear infinite">
       </div>
-      <div class="mono" style="color:#3D4F6B;font-size:11px;letter-spacing:.2em">REELIO</div>
+      <div class="mono" style="color:#8899AA;font-size:11px;letter-spacing:.2em">REELIO</div>
     </div>
   </div>
   <script src="react.min.js"></script>
@@ -406,7 +412,7 @@
       var D = {
         bg: "#05050A", doom: "#FF2D55", doomMag: "#f20da6",
         safe: "#0ddff2", warn: "#FFB340", violet: "#BF5AF2", blue: "#0A84FF",
-        text: "#D0DCF0", muted: "#3D4F6B",
+        text: "#D0DCF0", muted: "#8899AA",
         border: "rgba(13,223,242,0.12)",
         borderDoom: "rgba(242,13,166,0.35)",
         borderDanger: "rgba(255,45,85,0.35)"
@@ -714,8 +720,8 @@
           e("div", { className: "card " + (S.doom_label === "DOOM" ? "card-danger" : ""), style: { marginBottom: 12, overflow: "hidden" } },
             e("div", { style: { padding: "12px 16px", background: S.doom_label === "DOOM" ? "linear-gradient(90deg," + D.doom + "18,transparent)" : "linear-gradient(90deg," + D.safe + "10,transparent)", borderBottom: "1px solid " + (S.doom_label === "DOOM" ? D.borderDanger : D.border), display: "flex", justifyContent: "space-between", alignItems: "center" } },
               e("div", null,
-                e(Label, { style: { color: D.doom } }, "Current Intervention"),
-                e("div", { className: "mono", style: { fontSize: 9, color: D.muted, marginTop: 2 } }, "ID: #SESSION-ACTIVE")
+                e(Label, { style: { color: D.doom } }, "Cumulative Habit Load (All-Time)"),
+                e("div", { className: "mono", style: { fontSize: 9, color: D.muted, marginTop: 2 } }, "Global Intervention Priority")
               ),
               e(Ico, { name: "AlertTriangle", size: 18, color: D.doom, style: { filter: "drop-shadow(0 0 6px " + D.doom + ")" } })
             ),
@@ -732,11 +738,11 @@
             )
           ),
 
-          /* Live session card */
-          e("div", { style: { marginBottom: 6 } }, e(Label, { style: { paddingLeft: 2 } }, "Live Session Summary")),
+          /* Stats summary card (Last 10) */
+          e("div", { style: { marginBottom: 6 } }, e(Label, { style: { paddingLeft: 2 } }, "Recent Summary (Last 10 Sessions)")),
           e("div", { className: "card " + (S.doom_label === "DOOM" ? "card-doom" : ""), style: { padding: 0, marginBottom: 12, overflow: "hidden" } },
             e("div", { style: { padding: "10px 16px", background: S.doom_label === "DOOM" ? "linear-gradient(90deg," + D.doomMag + "18,transparent)" : "linear-gradient(90deg," + D.safe + "10,transparent)", borderBottom: "1px solid " + (S.doom_label === "DOOM" ? D.borderDoom : D.border), display: "flex", justifyContent: "space-between", alignItems: "center" } },
-              e(Label, null, "Current Risk State"),
+              e(Label, null, "LATEST TRENDS"),
               e(Tag, { label: S.doom_label })
             ),
             e("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr" } },
@@ -854,7 +860,7 @@
             e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 } },
               e("div", null,
                 e(Label, null, "Cognitive Stability Index"),
-                e("div", { style: { fontSize: 13, color: D.text, marginTop: 4, fontWeight: 600 } }, "Neural Load Assessment · Last Session")
+                e("div", { style: { fontSize: 13, color: D.text, marginTop: 4, fontWeight: 600 } }, "Neural Load Assessment · Last 10 Sessions")
               ),
               e(Tag, { label: S.doom_label })
             ),
@@ -904,10 +910,10 @@
               e("text", { x: "70", y: "14", textAnchor: "middle", fontFamily: "Share Tech Mono", fontSize: "9", fill: D.safe + "99" }, "↺ " + Math.round(S.A[0][0] * 100) + "%"),
               e("text", { x: "270", y: "14", textAnchor: "middle", fontFamily: "Share Tech Mono", fontSize: "9", fill: D.doomMag + "cc" }, "↺ " + Math.round(S.A[1][1] * 100) + "%"),
               e("circle", { r: "4", fill: D.doomMag, style: { filter: "drop-shadow(0 0 5px " + D.doomMag + ")" } },
-                e("animateMotion", { path: "M 108 38 Q 170 0 232 38", dur: "3.2s", repeatCount: "indefinite" })
+                e("animateMotion", { path: "M 108 38 Q 170 0 232 38", dur: "4.5s", repeatCount: "indefinite" })
               ),
               e("circle", { r: "4", fill: D.safe, opacity: .8, style: { filter: "drop-shadow(0 0 5px " + D.safe + ")" } },
-                e("animateMotion", { path: "M 232 72 Q 170 110 108 72", dur: "3.2s", repeatCount: "indefinite" })
+                e("animateMotion", { path: "M 232 72 Q 170 110 108 72", dur: "4.5s", repeatCount: "indefinite" })
               )
             ),
             e("div", { style: { display: "flex", gap: 8, marginTop: 8 } },
@@ -1008,7 +1014,7 @@
               e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 } },
                 e("div", null,
                   e(Label, { style: { display: "block", marginBottom: 2 } }, "Session Topology"),
-                  e("div", { className: "mono", style: { fontSize: 9, color: D.muted } }, "ID: #session • live")
+                  e("div", { className: "mono", style: { fontSize: 9, color: D.muted } }, "Per Reel Doom Check")
                 ),
                 e("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
                   e("div", { style: { display: "flex", alignItems: "center", gap: 4, background: "rgba(255,255,255,0.05)", padding: "3px 8px", borderRadius: 4 } },
@@ -1147,6 +1153,13 @@
             e("div", { style: { padding: "10px 14px", background: "rgba(34,211,238,0.04)", borderRadius: 10, borderLeft: "2px solid rgba(34,211,238,0.3)", fontSize: 11, color: "rgba(248,250,252,0.55)", lineHeight: 1.7 } },
               e("strong", { style: { color: "rgba(34,211,238,0.8)" } }, "What this means: "), whatMeansDesc
             )
+          ),
+
+          /* ── PDF Export ── */
+          e("div", { style: { display: "flex", justifyContent: "center", alignItems: "center", marginTop: 32, marginBottom: 16 } },
+            e("button", { onClick: function () { window.Android && window.Android.generateReport && window.Android.generateReport(); }, className: "ripple-surface", style: { background: "none", border: "1px solid " + D.safe, borderRadius: 8, padding: "14px 24px", cursor: "pointer", display: "flex", alignItems: "center", gap: 10, color: D.safe, fontFamily: "inherit", fontSize: 13, fontWeight: 700, letterSpacing: "0.05em", boxShadow: "0 0 16px " + D.safe + "33" } },
+              e(Ico, { name: "Download", size: 18, color: D.safe }), " GENERATE INTELLIGENCE REPORT"
+            )
           )
         );
       }
@@ -1205,28 +1218,146 @@
               e(Ico, { name: "ChevronDown", size: 16, color: D.safe })
             ),
             e("div", { id: "metrics-doc-content-idx", style: { display: "none", marginTop: 16, fontSize: 12, color: D.muted, lineHeight: 1.6 } },
+
+              /* ── CORE SCORES ── */
+              e("div", { className: "mono", style: { fontSize: 9, color: D.safe, letterSpacing: "0.15em", marginBottom: 10 } }, "— CORE SCORES —"),
+
+              e("div", { style: { marginBottom: 14 } },
+                e("strong", { style: { color: "#fff" } }, "Cognitive Stability Index"), e("br", null),
+                e("span", { style: { color: D.safe } }, "The Math: "), "Displays (1 − S_t) as a gauge, where S_t is the HMM's posterior doom probability for your last session. A value of 85% means only 15% doom probability.", e("br", null),
+                e("span", { style: { color: D.safe } }, "The Value: "), "Your real-time 'mental health reading' — how likely you are in deliberate control right now."
+              ),
+              e("div", { style: { marginBottom: 14 } },
+                e("strong", { style: { color: "#fff" } }, "Current Intervention Score"), e("br", null),
+                e("span", { style: { color: D.safe } }, "The Math: "), "The DoomScorer's weighted composite of 7 heuristic penalties for the current session, normalized 0–1.", e("br", null),
+                e("span", { style: { color: D.safe } }, "The Value: "), "How urgently the session needs intervention. Above 0.6 triggers a DOOM label."
+              ),
+              e("div", { style: { marginBottom: 14 } },
+                e("strong", { style: { color: "#fff" } }, "Capture Rate · All-Time"), e("br", null),
+                e("span", { style: { color: D.safe } }, "The Math: "), "Percentage of all historic reels where the HMM calculated your Doom State probability at >50%.", e("br", null),
+                e("span", { style: { color: D.safe } }, "The Value: "), "Your long-term vulnerability. A rising capture rate means the algorithm is winning more often."
+              ),
+              e("div", { style: { marginBottom: 14 } },
+                e("strong", { style: { color: "#fff" } }, "Model Confidence"), e("br", null),
+                e("span", { style: { color: D.safe } }, "The Math: "), "Derived from the HMM's Baum-Welch convergence quality and state separation. Starts low, grows with sessions.", e("br", null),
+                e("span", { style: { color: D.safe } }, "The Value: "), "How 'personal' the model is. Below 40% = initializing (using priors). Above 70% = fully calibrated to your patterns."
+              ),
+
+              /* ── MARKOV MODEL METRICS ── */
+              e("div", { className: "mono", style: { fontSize: 9, color: D.doomMag, letterSpacing: "0.15em", marginTop: 16, marginBottom: 10 } }, "— MARKOV MODEL —"),
+
+              e("div", { style: { marginBottom: 14 } },
+                e("strong", { style: { color: "#fff" } }, "Trap Rate (A[0][1])"), e("br", null),
+                e("span", { style: { color: D.doomMag } }, "The Math: "), "Transition probability from Casual → Doom in the learned Markov matrix. e.g. 18% means each casual reel has an 18% chance of flipping you into doom.", e("br", null),
+                e("span", { style: { color: D.doomMag } }, "The Value: "), "How easily the algorithm hooks you. Lower is better."
+              ),
+              e("div", { style: { marginBottom: 14 } },
+                e("strong", { style: { color: "#fff" } }, "Escape Rate (A[1][0])"), e("br", null),
+                e("span", { style: { color: D.doomMag } }, "The Math: "), "Transition probability from Doom → Casual. e.g. 6% means once hooked, you only have a 6% per-reel chance of breaking free.", e("br", null),
+                e("span", { style: { color: D.doomMag } }, "The Value: "), "How hard it is to snap out of autopilot. Higher is better."
+              ),
+              e("div", { style: { marginBottom: 14 } },
+                e("strong", { style: { color: "#fff" } }, "Doom Inertia (A[1][1])"), e("br", null),
+                e("span", { style: { color: D.doomMag } }, "The Math: "), "Self-transition probability of the Doom state = 1 − Escape Rate. e.g. 94% means once captured, 94 out of 100 reels keep you locked in.", e("br", null),
+                e("span", { style: { color: D.doomMag } }, "The Value: "), "The 'stickiness' of the doom state. This is the scariest number on the dashboard."
+              ),
+              e("div", { style: { marginBottom: 14 } },
+                e("strong", { style: { color: "#fff" } }, "Pull Index"), e("br", null),
+                e("span", { style: { color: D.doomMag } }, "The Math: "), "Doom Inertia ÷ Trap Rate. e.g. if inertia = 94% and trap = 18%, pull index = 5.2x.", e("br", null),
+                e("span", { style: { color: D.doomMag } }, "The Value: "), "You are 5.2× more likely to keep scrolling once hooked than you were to start. The asymmetry of addiction."
+              ),
+              e("div", { style: { marginBottom: 14 } },
+                e("strong", { style: { color: "#fff" } }, "Recovery Window"), e("br", null),
+                e("span", { style: { color: D.doomMag } }, "The Math: "), "1 ÷ Escape Rate. The expected number of reels you need to scroll through in the doom state before statistically breaking free.", e("br", null),
+                e("span", { style: { color: D.doomMag } }, "The Value: "), "If 16.7r, you typically need to scroll past ~17 reels before your brain disengages."
+              ),
+              e("div", { style: { marginBottom: 14 } },
+                e("strong", { style: { color: "#fff" } }, "Regime Stability"), e("br", null),
+                e("span", { style: { color: D.doomMag } }, "The Math: "), "Average expected dwell time in the current dominant state before a regime switch, computed from the Markov eigenvalues.", e("br", null),
+                e("span", { style: { color: D.doomMag } }, "The Value: "), "How many reels your current behavioral 'mode' tends to persist before flipping."
+              ),
+              e("div", { style: { marginBottom: 14 } },
+                e("strong", { style: { color: "#fff" } }, "State Dynamics Diagram"), e("br", null),
+                e("span", { style: { color: D.doomMag } }, "The Math: "), "Visual representation of the 2×2 Markov transition matrix. Arrows show transition probabilities; self-loops show retention.", e("br", null),
+                e("span", { style: { color: D.doomMag } }, "The Value: "), "An intuitive map of how your brain moves between intentional and compulsive scrolling."
+              ),
+
+              /* ── DASHBOARD CHARTS ── */
+              e("div", { className: "mono", style: { fontSize: 9, color: D.warn, letterSpacing: "0.15em", marginTop: 16, marginBottom: 10 } }, "— DASHBOARD CHARTS —"),
+
               e("div", { style: { marginBottom: 14 } },
                 e("strong", { style: { color: "#fff" } }, "Cumulative Exposure (14-Day Heatmap)"), e("br", null),
-                e("span", { style: { color: D.safe } }, "The Math: "), "Calculates the average Doom Score across all sessions on a given calendar day.", e("br", null),
-                e("span", { style: { color: D.safe } }, "The Value: "), "Reveals multi-day behavioral trends (e.g., higher exposure consistently on weekends)."
+                e("span", { style: { color: D.warn } }, "The Math: "), "Calculates the average Doom Score across all sessions on a given calendar day.", e("br", null),
+                e("span", { style: { color: D.warn } }, "The Value: "), "Reveals multi-day behavioral trends (e.g., higher exposure consistently on weekends)."
               ),
               e("div", { style: { marginBottom: 14 } },
                 e("strong", { style: { color: "#fff" } }, "Circadian Doom Profile (24-Hour Curve)"), e("br", null),
-                e("span", { style: { color: D.safe } }, "The Math: "), "Groups all historic sessions by their Start Time hour, averaging the Doom Probability for each specific hour of the day.", e("br", null),
-                e("span", { style: { color: D.safe } }, "The Value: "), "Maps your biological vulnerability. Shows what time of day you are most prone to mindless scrolling."
+                e("span", { style: { color: D.warn } }, "The Math: "), "Groups all historic sessions by their Start Time hour, averaging the Doom Probability for each specific hour of the day.", e("br", null),
+                e("span", { style: { color: D.warn } }, "The Value: "), "Maps your biological vulnerability. Shows what time of day you are most prone to mindless scrolling."
               ),
               e("div", { style: { marginBottom: 14 } },
-                e("strong", { style: { color: "#fff" } }, "Pull Index (Doom Inertia)"), e("br", null),
-                e("span", { style: { color: D.safe } }, "The Math: "), "A multiplier derived from the Markov Model. Doom Inertia (Staying hooked) ÷ Trap Rate (Getting hooked).", e("br", null),
-                e("span", { style: { color: D.safe } }, "The Value: "), "If 5.2x, you are mathematically 5.2 times more likely to stay scrolling once hooked than you were to initially start."
+                e("strong", { style: { color: "#fff" } }, "Session Topology (Per-Reel Doom Check)"), e("br", null),
+                e("span", { style: { color: D.warn } }, "The Math: "), "Plots the HMM's posterior doom probability for each individual reel within a session. The slider scrubs through reels.", e("br", null),
+                e("span", { style: { color: D.warn } }, "The Value: "), "See the exact moment within a session where your scrolling went from deliberate to automatic."
+              ),
+
+              /* ── LIVE SESSION METRICS ── */
+              e("div", { className: "mono", style: { fontSize: 9, color: D.violet, letterSpacing: "0.15em", marginTop: 16, marginBottom: 10 } }, "— LIVE SESSION METRICS —"),
+
+              e("div", { style: { marginBottom: 14 } },
+                e("strong", { style: { color: "#fff" } }, "Session Duration"), e("br", null),
+                e("span", { style: { color: D.violet } }, "The Math: "), "Wall-clock time from first detected reel event to last, formatted as MM:SS.", e("br", null),
+                e("span", { style: { color: D.violet } }, "The Value: "), "Raw time investment. Sessions exceeding 15 minutes are flagged as concerning."
               ),
               e("div", { style: { marginBottom: 14 } },
-                e("strong", { style: { color: "#fff" } }, "Capture Rate (All-Time)"), e("br", null),
-                e("span", { style: { color: D.safe } }, "The Math: "), "Percentage of all historic reels where the AI calculated your Doom State probability at >50%."
+                e("strong", { style: { color: "#fff" } }, "Session Reels"), e("br", null),
+                e("span", { style: { color: D.violet } }, "The Math: "), "Count of distinct reel-view events detected by the Accessibility Service during the current session.", e("br", null),
+                e("span", { style: { color: D.violet } }, "The Value: "), "Velocity of consumption. The DoomScorer penalizes length progressively above the personal baseline."
               ),
+              e("div", { style: { marginBottom: 14 } },
+                e("strong", { style: { color: "#fff" } }, "Avg Dwell Time"), e("br", null),
+                e("span", { style: { color: D.violet } }, "The Math: "), "Mean time spent on each reel in the session = total session duration ÷ number of reels.", e("br", null),
+                e("span", { style: { color: D.violet } }, "The Value: "), "Falling dwell times indicate 'dwell collapse' — your brain stops evaluating content and swipes on autopilot."
+              ),
+              e("div", { style: { marginBottom: 14 } },
+                e("strong", { style: { color: "#fff" } }, "Time Since Last Session"), e("br", null),
+                e("span", { style: { color: D.violet } }, "The Math: "), "Elapsed time since the previous session ended, calculated as (now − lastSessionEndTime).", e("br", null),
+                e("span", { style: { color: D.violet } }, "The Value: "), "Short gaps between sessions trigger the 'Rapid Re-entry' penalty — a sign of failed disengagement."
+              ),
+              e("div", { style: { marginBottom: 14 } },
+                e("strong", { style: { color: "#fff" } }, "Total Sessions · Doom Sessions · Interactions"), e("br", null),
+                e("span", { style: { color: D.violet } }, "The Math: "), "Total = count of all detected sessions. Doom = sessions where S_t ≥ 0.50. Interactions = sum of likes + comments + shares + saves.", e("br", null),
+                e("span", { style: { color: D.violet } }, "The Value: "), "Zero-interaction sessions are 'passive consumption' — content flowing past with no volitional response. A high passive ratio is an early automaticity signal."
+              ),
+
+              /* ── DOOM SCORE COMPONENTS ── */
+              e("div", { className: "mono", style: { fontSize: 9, color: D.doomMag, letterSpacing: "0.15em", marginTop: 16, marginBottom: 10 } }, "— DOOM SCORE COMPONENTS —"),
+
               e("div", { style: { marginBottom: 14 } },
                 e("strong", { style: { color: "#fff" } }, "Doom Score & Top Drivers"), e("br", null),
-                e("span", { style: { color: D.safe } }, "The Math: "), "Evaluates 6 heuristic penalties per session: Length (25%), Automaticity (20%), Exit Conflict (20%), Environment & Sleep (10%), Rapid Re-entry (15%), and Rewatch Compulsion (10%)."
+                e("span", { style: { color: D.doomMag } }, "The Math: "), "Evaluates 7 heuristic penalties per session: Session Length (25%), Scroll Automaticity (20%), Exit Conflict (20%), Rapid Re-entry (15%), Dwell Collapse (10%), Rewatch Compulsion (5%), and Environment (5%).", e("br", null),
+                e("span", { style: { color: D.doomMag } }, "The Value: "), "Identifies which specific behavioral pattern is driving your score — so you know what to work on."
+              ),
+              e("div", { style: { marginBottom: 14 } },
+                e("strong", { style: { color: "#fff" } }, "Session Length"), " — Penalizes sessions exceeding personal baseline reel count. Strongest single indicator of compromised volition."
+              ),
+              e("div", { style: { marginBottom: 14 } },
+                e("strong", { style: { color: "#fff" } }, "Exit Conflict"), " — Counts close/reopen cycles within 20 seconds. Indicates internal struggle between wanting to stop and being unable to."
+              ),
+              e("div", { style: { marginBottom: 14 } },
+                e("strong", { style: { color: "#fff" } }, "Rapid Re-entry"), " — Penalizes short intervals (<15 min) between sessions. Interpreted as failure to transition to a resting state."
+              ),
+              e("div", { style: { marginBottom: 14 } },
+                e("strong", { style: { color: "#fff" } }, "Scroll Automaticity"), " — Measures variance in swipe cadence. Low variance = robotic, stimulus-bound scrolling rhythm."
+              ),
+              e("div", { style: { marginBottom: 14 } },
+                e("strong", { style: { color: "#fff" } }, "Dwell Collapse"), " — Detects falling average dwell time compared to session start. Your brain stops evaluating content."
+              ),
+              e("div", { style: { marginBottom: 14 } },
+                e("strong", { style: { color: "#fff" } }, "Rewatch Compulsion"), " — Counts back-scrolls to re-consume already-viewed content. A key marker of capture."
+              ),
+              e("div", { style: { marginBottom: 14 } },
+                e("strong", { style: { color: "#fff" } }, "Environment"), " — Late-night and dark-room usage penalized due to circadian disruption risk and reduced prefrontal inhibition."
               )
             )
           ),
@@ -1296,87 +1427,131 @@
          SETUP / ERROR SCREEN
       ───────────────────────────────────────────────────────────────── */
       function SetupScreen(p) {
-        var ps = useState({ x: -80, y: 20, r: 0, s: 1 }), pos = ps[0], setPos = ps[1];
-        var sps = useState(false), spark = sps[0], setSpark = sps[1];
-        var opS = useState(0), opacity = opS[0], setOpacity = opS[1];
-        var puls = useState(false), gridPulse = puls[0], setGridPulse = puls[1];
+        var on = p.svcActive;
 
-        useEffect(function () {
-          var t0 = setTimeout(function () { setOpacity(0.35); setPos({ x: -30, y: 0, r: 0, s: 1 }); }, 100);
-          var t1 = setTimeout(function () { setPos({ x: -10, y: -4, r: 3, s: 1 }); }, 1500);
-          var t2 = setTimeout(function () { setPos({ x: -10, y: 0, r: 4, s: 0.95 }); }, 2200);
-          var t3 = setTimeout(function () {
-            setPos({ x: -35, y: -2, r: -4, s: 1 });
-            setSpark(true);
-            setGridPulse(true);
-          }, 2500);
-          var t4 = setTimeout(function () {
-            setSpark(false);
-            setGridPulse(false);
-            setPos({ x: -15, y: 0, r: 0, s: 1 });
-          }, 2650);
-          var t5 = setTimeout(function () { setPos({ x: 20, y: 30, r: 6, s: 1 }); }, 3200);
-          var t6 = setTimeout(function () { setOpacity(0); }, 4000);
+        var progressValue = (function () {
+          var totalSessions = (p.rawData && p.rawData.sessions) ? p.rawData.sessions.length : 0;
+          var confidence = (p.rawData && typeof p.rawData.model_confidence === 'number') ? p.rawData.model_confidence : 0;
+          if (totalSessions === 0) return 0;
+          if (totalSessions < 5) return 0.15;
+          if (totalSessions < 10) return 0.35;
+          return Math.min(0.95, confidence);
+        })();
 
-          return function () { clearTimeout(t0); clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); clearTimeout(t4); clearTimeout(t5); clearTimeout(t6); };
-        }, []);
+        var isCalibrated = progressValue >= 0.7;
+        var pPct = Math.round(progressValue * 100);
 
-        var transDur = pos.x === -35 ? "0.1s" : "1.2s";
+        var QUOTES = [
+          "The algorithm knows you better than your therapist. We're fixing that.",
+          "Somewhere, a recommendation engine is disappointed in you. Good.",
+          "Your attention is a product. REELIO is the refund.",
+          "You opened Instagram. ALSE noticed. No judgment. Some judgment.",
+          "Dopamine is a liar. \u2014 Your Prefrontal Cortex",
+          "Variable reward schedules: also how slot machines work. Coincidence?",
+          "Your brain's default mode network called. It wants its bandwidth back.",
+          "Attention is the only currency that can't be printed. Spend carefully.",
+          "We are what we repeatedly scroll. \u2014 Aristotle (probably)",
+          "The unexamined feed is not worth watching. \u2014 Socrates, if he had WiFi",
+          "In the middle of difficulty lies opportunity. Also, 47 more reels.",
+          "Know thyself. ALSE is helping. \u2014 Delphi Oracle, v3.0",
+          "Current session: unmonitored. Historical pattern: concerning.",
+          "This screen is the least addictive part of your phone. Enjoy it.",
+          "Boredom is a skill. Relearn it.",
+          "The best reel you'll watch today hasn't been made yet. Log off.",
+          "Your future self is watching your screen time report. Wave hi."
+        ];
+        var qi = useState(function () { return Math.floor(Math.random() * QUOTES.length); })[0];
+        var randomQuote = QUOTES[qi];
 
-        return e("div", { style: { minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: gridPulse ? "#06141a" : D.bg, padding: 32, gap: 20, position: "relative", overflow: "hidden", transition: "background 0.3s ease" } },
+        return e("div", {
+          className: "slide-up",
+          style: { minHeight: "100vh", display: "flex", flexDirection: "column", background: D.bg, padding: "24px 16px" }
+        },
 
-          /* Background Grid */
-          e("div", {
-            style: {
-              position: "absolute", inset: 0, pointerEvents: "none",
-              backgroundImage: "linear-gradient(" + D.safe + "15 1px, transparent 1px), linear-gradient(90deg, " + D.safe + "15 1px, transparent 1px)",
-              backgroundSize: "30px 30px",
-              opacity: gridPulse ? 0.6 : 0.15,
-              transition: "opacity 0.2s ease"
-            }
-          }),
-
-          /* Primitive Dinosaur */
-          e("div", {
-            style: {
-              position: "absolute", left: "20%", top: "40%", pointerEvents: "none", zIndex: 0,
-              transform: "translate(" + pos.x + "px, " + pos.y + "px) rotate(" + pos.r + "deg) scaleY(" + pos.s + ")",
-              opacity: opacity,
-              filter: "drop-shadow(0 0 6px " + D.safe + ")",
-              transitionProperty: "transform, opacity",
-              transitionDuration: transDur + ", 1.5s",
-              transitionTimingFunction: pos.x === -35 ? "cubic-bezier(0.1, 0.9, 0.2, 1)" : "ease-out"
-            }
-          },
-            e("svg", { width: 30, height: 30, viewBox: "0 0 24 24", fill: "none", stroke: D.safe, strokeWidth: 1.5, strokeLinejoin: "miter", style: { display: "block" } },
-              e("path", { d: "M2 18h2v-2h2v-2h2v-4h2v-2h2v-2h4v2h2v2h2v4h-2v2h-2v2h-2v2M8 18v4M12 18v4M16 10h2" })
+          /* Top Bar */
+          e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 40 } },
+            e(Ico, { name: "Radio", size: 18, color: D.muted }),
+            e("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
+              e("div", { style: { width: 6, height: 6, borderRadius: "50%", background: on ? D.safe : D.doom } }),
+              e("span", { className: "mono", style: { fontSize: 10, color: on ? D.safe : D.doom, letterSpacing: "0.1em" } }, "SYSTEM STATUS: " + (on ? "ACTIVE" : "INACTIVE"))
             ),
-            spark && e("div", {
-              style: {
-                position: "absolute", left: -8, top: 4, width: 14, height: 14, borderRadius: "50%",
-                background: D.safe, filter: "blur(4px)", animation: "ping-slow 0.3s ease-out forwards"
-              }
-            })
+            e(Ico, { name: "Settings", size: 18, color: D.muted })
           ),
 
-          e("div", { style: { position: "relative", zIndex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 20, width: "100%" } },
-            e("div", { style: { width: 64, height: 64, borderRadius: "50%", background: D.safe + "15", border: "1px solid " + D.safe + "44", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: gridPulse ? "0 0 20px " + D.safe + "44" : "none", transition: "box-shadow 0.3s ease" } },
-              e(Ico, { name: "Shield", size: 28, color: D.safe })
+          /* Hero Section */
+          e("div", { style: { flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", position: "relative" } },
+
+            /* Ambient Glow */
+            e("div", { style: { position: "absolute", width: 280, height: 280, borderRadius: "50%", background: "radial-gradient(circle, " + (on ? D.safe : "#222") + " 0%, transparent 60%)", opacity: on ? 0.15 : 0.05, pointerEvents: "none" } }),
+
+            /* Orbital Ring */
+            e("div", { style: { position: "relative", width: 240, height: 240, border: "1px dashed " + (on ? D.safe + "88" : D.muted + "44"), borderRadius: "50%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", animation: on ? "spin 30s linear infinite" : "none" } },
+              /* Content inside ring must counter-rotate if spinning */
+              e("div", { style: { display: "flex", flexDirection: "column", alignItems: "center", animation: on ? "spin-reverse 30s linear infinite" : "none" } },
+                e("div", { style: { fontSize: 42, fontWeight: 800, color: D.safe, letterSpacing: "0.05em", textShadow: on ? "0 0 20px " + D.safe + "66" : "none", lineHeight: 1 } }, "REELIO"),
+                e("div", { style: { width: 30, height: 3, background: D.doomMag, margin: "8px 0 16px", borderRadius: 2 } }),
+                e("div", { className: "mono", style: { fontSize: 10, color: D.text, letterSpacing: "0.1em" } }, "YOUR BRAIN"),
+                e("div", { className: "mono", style: { fontSize: 10, color: D.text, letterSpacing: "0.1em" } }, "HAS A FIREWALL.")
+              ),
+
+              /* Orbital Bug Icon (only visible when OFF) */
+              !on && e("div", { style: { position: "absolute", bottom: -10, right: 30, background: D.bg, padding: 4, borderRadius: "50%" } },
+                e(Ico, { name: "Bug", size: 16, color: D.muted })
+              )
             ),
-            e("div", { style: { fontSize: 24, fontWeight: 800, color: "#fff", textAlign: "center" } }, "Reelio"),
-            e("div", { className: "mono", style: { fontSize: 10, color: D.safe, letterSpacing: "0.3em", textAlign: "center" } }, "SETUP REQUIRED"),
-            e("div", { className: "card", style: { width: "100%", padding: 20, position: "relative" } },
-              e("div", { style: { position: "absolute", left: -1, top: 0, bottom: 0, width: 2, background: gridPulse ? D.safe : "transparent", transition: "background 0.1s" } }),
-              e("div", { style: { fontSize: 14, fontWeight: 700, color: D.text, marginBottom: 12 } }, "Getting Started"),
-              ["1. Settings → Accessibility → Installed Services", "2. Enable \"Reelio Tracker\"", "3. Open Instagram and scroll Reels", "4. Return here to see your data"].map(function (s, i) {
-                return e("div", { key: i, style: { display: "flex", gap: 10, marginBottom: 10 } },
-                  e("div", { className: "mono", style: { fontSize: 11, color: D.safe, flexShrink: 0 } }, s.slice(0, 2)),
-                  e("div", { style: { fontSize: 13, color: D.muted } }, s.slice(3))
-                );
-              })
+
+            /* Status Quote Below Orb */
+            e("div", { className: "mono", style: { fontSize: 10, color: D.muted, marginTop: 24, letterSpacing: "0.04em", textAlign: "center", maxWidth: 280, lineHeight: 1.5, fontStyle: "italic" } },
+              '"' + randomQuote + '"'
+            )
+          ),
+
+          /* Bottom Section */
+          e("div", { style: { marginTop: "auto", display: "flex", flexDirection: "column", gap: 16 } },
+
+            /* Status Card */
+            e("div", { className: "card", style: { padding: "16px", border: "1px solid " + (on ? D.safe + "44" : D.doom + "44"), background: on ? D.safe + "0a" : D.doom + "0a" } },
+              e("div", { style: { fontSize: 14, fontWeight: 700, color: "#fff", marginBottom: 4 } }, "Accessibility Service"),
+              e("div", { className: "mono", style: { fontSize: 11, color: on ? D.safe : D.doom } },
+                on ? "NEURAL MONITOR ACTIVE" : "NEURAL MONITOR INACTIVE"
+              )
             ),
-            e("button", { className: "btn-primary ripple-surface", onClick: function () { window.Android && window.Android.enableAccessibility && window.Android.enableAccessibility(); } }, "Enable Accessibility Service"),
-            p.message && e("div", { style: { fontSize: 12, color: D.muted, textAlign: "center", lineHeight: 1.6, marginTop: 4 } }, p.message)
+
+            p.message && e("div", { style: { fontSize: 12, color: D.doom, textAlign: "center" } }, p.message),
+
+            /* CTA Button */
+            on ?
+              e("button", {
+                className: "btn-primary",
+                style: { background: "transparent", border: "1px solid " + D.safe, color: D.safe },
+              },
+                e(Ico, { name: "Check", size: 16, style: { marginRight: 8 } }),
+                "ALSE ENGINE ACTIVE"
+              )
+              :
+              e("button", {
+                className: "btn-primary",
+                onClick: function () { window.Android && window.Android.enableAccessibility && window.Android.enableAccessibility(); }
+              },
+                e(Ico, { name: "Shield", size: 16, style: { marginRight: 8 } }),
+                "ENABLE ALSE ENGINE"
+              ),
+
+            /* Progress Bar Section (Only show if actually building data) */
+            p.rawData && e("div", { style: { marginTop: 8 } },
+              e("div", { style: { display: "flex", justifyContent: "space-between", marginBottom: 6 } },
+                e(Label, { style: { color: isCalibrated ? D.safe : D.muted } }, isCalibrated ? "ALSE CALIBRATED" : "NEURAL CALIBRATION"),
+                e("span", { className: "mono", style: { fontSize: 10, color: isCalibrated ? D.safe : D.text } }, pPct + "%")
+              ),
+              e("div", { style: { height: 4, background: "rgba(255,255,255,0.1)", borderRadius: 2, overflow: "hidden" } },
+                e("div", { style: { width: pPct + "%", height: "100%", background: isCalibrated ? D.safe : D.text, transition: "width 0.5s ease-out, background 0.3s" } })
+              ),
+              /* Decorative mini lines */
+              e("div", { style: { display: "flex", gap: 4, marginTop: 6 } },
+                e("div", { style: { height: 2, width: 24, background: D.doomMag + "88", borderRadius: 1 } }),
+                e("div", { style: { height: 2, width: 12, background: D.safe + "88", borderRadius: 1 } })
+              )
+            )
           )
         );
       }
@@ -1390,6 +1565,7 @@
         var ls = useState(true), loading = ls[0], setLoading = ls[1];
         var es = useState(null), errMsg = es[0], setErrMsg = es[1];
         var vs = useState(false), svcActive = vs[0], setSvcActive = vs[1];
+        var rls = useState(false), showReportLoading = rls[0], setShowReportLoading = rls[1];
 
         useEffect(function () {
           if (window.Android && window.Android.isAccessibilityEnabled) {
@@ -1425,11 +1601,13 @@
           }
           window.reactDataCallback = handleData;
           if (window.injectedJsonData) { handleData(window.injectedJsonData); return; }
-          var t = setTimeout(function () { setLoading(false); }, 3000);
+          window.showReportLoading = function (b) { setShowReportLoading(b); };
+          var t = setTimeout(function () { setLoading(false); }, 300);
           return function () {
             clearTimeout(t);
             window.reactDataCallback = null;
             window.updateServiceStatus = null;
+            window.showReportLoading = null;
           };
         }, []);
 
@@ -1440,10 +1618,34 @@
           );
         }
 
-        if (!rawData) { return e(SetupScreen, { message: errMsg }); }
+        if (showReportLoading) {
+          return e("div", { style: { minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: D.bg, gap: 16 } },
+            e("div", { style: { width: 40, height: 40, border: "3px solid rgba(255,0,110,0.15)", borderTopColor: D.doomMag, borderRadius: "50%", animation: "spin .8s linear infinite" } }),
+            e("div", { className: "mono", style: { color: D.doomMag, fontSize: 11, letterSpacing: "0.2em", textShadow: "0 0 10px " + D.doomMag + "88" } }, "GENERATING BEHAVIORAL PROFILE PDF...")
+          );
+        }
+
+        if (!rawData || rawData.sessions.length === 0) {
+          return e(SetupScreen, {
+            message: errMsg,
+            rawData: rawData,
+            svcActive: svcActive
+          });
+        }
 
         /* ── Derive session data ── */
         var mr = rawData.sessions[rawData.sessions.length - 1];
+
+        /* ── Aggregate last 10 sessions for deeper inference ── */
+        var last10 = rawData.sessions.slice(-10);
+        var l10_avgSt = last10.reduce(function (a, b) { return a + b.S_t; }, 0) / last10.length;
+        var l10_avgNReels = last10.reduce(function (a, b) { return a + (b.nReels || 0); }, 0) / last10.length;
+        var l10_avgDwellAvg = last10.reduce(function (a, b) { return a + parseFloat(b.avgDwell || b.meanDwell || b.avg_dwell || 0); }, 0) / last10.length;
+        var l10_totalDurationSec = last10.reduce(function (a, b) { return a + ((b.nReels || 0) * parseFloat(b.avgDwell || b.meanDwell || b.avg_dwell || 0)); }, 0);
+        var l10_avgDurationSec = l10_totalDurationSec / last10.length;
+        var l10_m = Math.floor(l10_avgDurationSec / 60);
+        var l10_s = Math.round(l10_avgDurationSec % 60);
+
         var allSt = rawData.sessions.map(function (s) { return s.S_t; });
         var avgSt = allSt.reduce(function (a, b) { return a + b; }, 0) / rawData.sessions.length;
         var A = (rawData.model_parameters && rawData.model_parameters.transition_matrix) || [[0.8, 0.2], [0.2, 0.8]];
@@ -1478,8 +1680,9 @@
         })();
 
         var session = Object.assign({}, mr, {
-          doom_label: riskLabel(mr.S_t),
-          doom_score: mr.S_t,
+          doom_label: riskLabel(l10_avgSt),
+          S_t: l10_avgSt,
+          doom_score: l10_avgSt,
           model_confidence: rawData.model_confidence != null ? rawData.model_confidence : Math.min(0.95, rawData.sessions.length / 20),
           doom_pull_index_num: (A[0][1] / Math.max(0.01, A[1][0])),
           doom_pull_index: (A[0][1] / Math.max(0.01, A[1][0])).toFixed(1),
@@ -1490,23 +1693,17 @@
           total_dwell_today_min: totalDwellMin,
           capture_rate: pLostTrack,
           time_period_avg_capture: timePeriodAvgCapture,
-          neural_load: mr.S_t,
-          intervention_score: Math.min(1.0, (mr.S_t > 0.5 ? 0.5 : 0) + pLostTrack),
+          neural_load: l10_avgSt,
+          intervention_score: Math.min(1.0, (avgSt > 0.5 ? 0.5 : 0) + pLostTrack),
           total_doom_reels: totalReelsAll > 0 ? Math.round(rawData.sessions.reduce(function (acc, s) { return acc + (s.nReels || 0) * s.S_t; }, 0)) : 0,
           A: A,
           doom_components: doomComponents
         });
 
-        var latestSessionRaw = rawData.sessions[rawData.sessions.length - 1];
-        var liveReels = latestSessionRaw.nReels || 0;
-        var liveAvgDwell = parseFloat(latestSessionRaw.avgDwell || latestSessionRaw.meanDwell || latestSessionRaw.avg_dwell || 0);
-        var liveDwellSec = liveAvgDwell * liveReels;
-        var lM = Math.floor(liveDwellSec / 60);
-        var lS = Math.round(liveDwellSec % 60);
         var live = {
-          duration: lM > 0 ? lM + "m " + lS + "s" : lS + "s",
-          reels: liveReels,
-          avg_dwell: liveAvgDwell.toFixed(1)
+          duration: l10_m > 0 ? l10_m + "m " + l10_s + "s" : l10_s + "s",
+          reels: Math.round(l10_avgNReels),
+          avg_dwell: l10_avgDwellAvg.toFixed(1)
         };
 
         var reelsData = perReelCapture.length > 0

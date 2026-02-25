@@ -169,6 +169,13 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
     companion object {
         private const val WINDOW_SIZE = 5
         private const val PREFS_NAME = "InstaTrackerPrefs"
+        // Cap rolling stat lists so processPreviousReel stays O(1) regardless of
+        // session length. Without this, after ~30 min of constant swiping the lists
+        // grow into thousands of entries and the O(n) / O(n log n) work in
+        // processPreviousReel causes Android to ANR-kill the accessibility service.
+        private const val MAX_DWELL_HISTORY = 200
+        private const val MAX_SCROLL_INTERVALS = 200
+        private const val MAX_INTERACTION_HISTORY = 200
         private const val KEY_SESSION_NUM = "session_number"
         private const val CSV_HEADER = "SCHEMA_VERSION=4\nSessionNum,ReelIndex,StartTime,EndTime,DwellTime,TimePeriod," +
             "AvgScrollSpeed,MaxScrollSpeed,RollingMean,RollingStd,CumulativeReels," +
@@ -347,6 +354,9 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
 
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED || event.eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED) {
             traverseNode(event.source)
+            // Passive watching (no scroll/click) still fires WINDOW_CONTENT_CHANGED;
+            // reset the idle timer so the session stays alive during long dwells.
+            resetSessionTimer(now)
             if (now - lastReelDebounceTime > 800) {
                 if (lastReelStartTime != 0L) processPreviousReel(now)
                 startNextReel(now)
@@ -429,6 +439,11 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
         
         // Start computing Layer 4 Derived Features
         sessionDwellTimes.add(dwellSec)
+        // Trim to rolling window to bound the O(n) work below.
+        if (sessionDwellTimes.size > MAX_DWELL_HISTORY) sessionDwellTimes.removeAt(0)
+        if (sessionScrollIntervals.size > MAX_SCROLL_INTERVALS) sessionScrollIntervals.removeAt(0)
+        if (halfSessionInteractions.size > MAX_INTERACTION_HISTORY) halfSessionInteractions.removeAt(0)
+
         val sessionDwellMean = sessionDwellTimes.average()
         val sessionDwellVar = sessionDwellTimes.map { (it - sessionDwellMean) * (it - sessionDwellMean) }.average()
         val sessionDwellStd = sqrt(sessionDwellVar).takeIf { it > 0 } ?: 1.0
@@ -501,8 +516,8 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
         val formEnd = timeFormat.format(Date(now))
         
         val luxDelta = if (ambientLuxStart != -1f && ambientLuxEnd != -1f) ambientLuxEnd - ambientLuxStart else 0f
-        val batteryIntent = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-        batteryLevelEnd = batteryIntent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+        // batteryLevelEnd is updated once per session in endCurrentSession to avoid
+        // calling registerReceiver (a Binder IPC) on the hot per-reel path.
         val batteryDelta = if (batteryLevelStart != -1 && batteryLevelEnd != -1) batteryLevelStart - batteryLevelEnd else 0
 
         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -842,13 +857,23 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
         if (packageName == "com.instagram.android") {
             if (idleTime > 300_000L) endCurrentSession(now)
         } else {
-            if (idleTime > 20_000L) endCurrentSession(lastActiveTime)
+            // 90 s is the sweet spot:
+            //   • Long enough to survive a long reel-watch pause (no scroll events
+            //     firing) without falsely ending the session mid-Instagram.
+            //   • Short enough that the post-session survey notification appears
+            //     promptly after the user actually closes Instagram.
+            // (The old 20 s was too aggressive; 300 s made the notification arrive
+            //  5 full minutes after the session ended.)
+            if (idleTime > 90_000L) endCurrentSession(lastActiveTime)
         }
     }
 
     private fun endCurrentSession(endTime: Long) {
         try {
             if (sessionStartTime == null) return
+            // Capture final battery level once here, not per-reel.
+            val batteryIntent = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+            batteryLevelEnd = batteryIntent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
             if (lastReelStartTime != 0L && endTime > lastReelStartTime) processPreviousReel(endTime)
             
             val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -1008,7 +1033,7 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
         val pendingIntent: PendingIntent = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setSmallIcon(R.drawable.ic_aware_notification)
             .setContentTitle("Reelio Check-In")
             .setContentText("Tap to record your post-session mood rating.")
             .setPriority(NotificationCompat.PRIORITY_HIGH)
@@ -1026,7 +1051,7 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
         val pendingIntent: PendingIntent = PendingIntent.getActivity(this, 1, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setSmallIcon(R.drawable.ic_aware_notification)
             .setContentTitle("Reelio Intention")
             .setContentText("Tap to record your session intention.")
             .setPriority(NotificationCompat.PRIORITY_HIGH)

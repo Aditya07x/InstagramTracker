@@ -22,6 +22,10 @@ import com.chaquo.python.android.AndroidPlatform
 import java.io.File
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
 
@@ -85,8 +89,24 @@ class MainActivity : ComponentActivity() {
             val isEnabled = isAccessibilityServiceEnabled()
             val jsCode = "javascript:if(window.updateServiceStatus) window.updateServiceStatus($isEnabled);"
             webView.evaluateJavascript(jsCode, null)
-            
-            // Re-trigger python injection to get latest events
+
+            // Instant transition: inject cached JSON immediately if available
+            val cachedFile = File(filesDir, "hmm_results.json")
+            if (cachedFile.exists() && cachedFile.length() > 50) {
+                try {
+                    val cachedJson = cachedFile.readText()
+                    val b64 = android.util.Base64.encodeToString(
+                        cachedJson.toByteArray(Charsets.UTF_8),
+                        android.util.Base64.NO_WRAP
+                    )
+                    webView.evaluateJavascript("injectDataB64('$b64');", null)
+                    Log.d("ReactDashboard", "Cached data injected instantly")
+                } catch (e: Exception) {
+                    Log.w("ReactDashboard", "Cache inject failed: ${e.message}")
+                }
+            }
+
+            // Background refresh with latest data
             injectDataWithDebounce(webView)
         }
     }
@@ -150,6 +170,9 @@ class MainActivity : ComponentActivity() {
                         return@execute
                     }
 
+                    // Cache for instant injection on next onResume
+                    try { File(filesDir, "hmm_results.json").writeText(jsonContent) } catch (_: Exception) {}
+
                      val b64Json = android.util.Base64.encodeToString(
                          jsonContent.toByteArray(Charsets.UTF_8),
                          android.util.Base64.NO_WRAP
@@ -177,7 +200,7 @@ class MainActivity : ComponentActivity() {
             }
         }
         
-        handler.postDelayed(injectionRunnable!!, 250)
+        handler.postDelayed(injectionRunnable!!, 100)
     }
 
     private fun injectErrorToReact(webView: WebView, errorMsg: String) {
@@ -281,6 +304,89 @@ class MainActivity : ComponentActivity() {
             val start = prefs.getInt("sleep_start_hour", 23) // default 11 PM
             val end = prefs.getInt("sleep_end_hour", 7)      // default 7 AM
             return "$start,$end"
+        }
+
+        @JavascriptInterface
+        fun generateReport() {
+            CoroutineScope(Dispatchers.Main).launch {
+                // Show magenta spinner via JS callback
+                webView.evaluateJavascript("if(window.showReportLoading) window.showReportLoading(true);", null)
+                val result = withContext(Dispatchers.IO) {
+                    try {
+                        // Use the pre-computed JSON (hmm_results.json) — no CSV re-parsing
+                        val jsonFile = File(filesDir, "hmm_results.json")
+                        val jsonContent = when {
+                            jsonFile.exists() && jsonFile.length() > 10 -> jsonFile.readText()
+                            else -> {
+                                // Fallback: run dashboard first to build json
+                                val csvFile = File(filesDir, "insta_data.csv")
+                                if (!csvFile.exists() || csvFile.length() < 10)
+                                    return@withContext "{\"error\": \"No session data found. Scroll some Reels first!\"}"
+                                if (!Python.isStarted()) Python.start(AndroidPlatform(mContext))
+                                val py = Python.getInstance()
+                                val mod = py.getModule("reelio_alse")
+                                val freshJson = mod.callAttr("run_dashboard_payload", csvFile.readText()).toString()
+                                jsonFile.writeText(freshJson)
+                                freshJson
+                            }
+                        }
+                        if (!Python.isStarted()) Python.start(AndroidPlatform(mContext))
+                        val py = Python.getInstance()
+                        val alseModule = py.getModule("reelio_alse")
+                        // Pass both json and csv — csv needed for dates, times, top driver
+                        val csvFile = File(filesDir, "insta_data.csv")
+                        val csvContent = if (csvFile.exists()) csvFile.readText() else ""
+                        alseModule.callAttr("run_report_payload", jsonContent, csvContent).toString()
+                    } catch (e: Exception) {
+                        "{\"error\": \"${e.message}\"}"
+                    }
+                }
+                // Hide spinner
+                webView.evaluateJavascript("if(window.showReportLoading) window.showReportLoading(false);", null)
+                // Save PDF
+                if (result.startsWith("{") && result.contains("error")) {
+                    Log.e("ReactDashboard", "Report error: $result")
+                    // Extract and show the real Python error message so we can debug it
+                    val errMsg = try {
+                        val raw = org.json.JSONObject(result).optString("error", result)
+                        // Show the LAST 200 chars — that's where the actual exception type lives
+                        if (raw.length > 200) "...${raw.takeLast(200)}" else raw
+                    } catch (_: Exception) {
+                        val r = result; if (r.length > 200) "...${r.takeLast(200)}" else r
+                    }
+                    android.widget.Toast.makeText(mContext, errMsg, android.widget.Toast.LENGTH_LONG).show()
+                } else {
+                    saveReportToDownloads(result)
+                }
+            }
+        }
+
+        private fun saveReportToDownloads(base64pdf: String) {
+            try {
+                val pdfBytes = android.util.Base64.decode(base64pdf, android.util.Base64.DEFAULT)
+                val fileName = "reelio_report_${System.currentTimeMillis()}.pdf"
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                    val resolver = (mContext as? MainActivity)?.contentResolver ?: return
+                    val cv = android.content.ContentValues().apply {
+                        put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+                        put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "application/pdf")
+                        put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS)
+                    }
+                    val uri = resolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv)
+                    if (uri != null) {
+                        resolver.openOutputStream(uri)?.use { it.write(pdfBytes) }
+                        android.widget.Toast.makeText(mContext, "Report saved to Downloads/$fileName", android.widget.Toast.LENGTH_LONG).show()
+                    }
+                } else {
+                    val dl = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+                    if (!dl.exists()) dl.mkdirs()
+                    File(dl, fileName).writeBytes(pdfBytes)
+                    android.widget.Toast.makeText(mContext, "Report saved to Downloads/$fileName", android.widget.Toast.LENGTH_LONG).show()
+                }
+            } catch (e: Exception) {
+                Log.e("ReactDashboard", "PDF save failed: ${e.message}", e)
+                android.widget.Toast.makeText(mContext, "Error saving report: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
+            }
         }
     }
 }

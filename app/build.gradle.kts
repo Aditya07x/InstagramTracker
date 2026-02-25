@@ -54,6 +54,7 @@ chaquopy {
             install("numpy")
             install("pandas")
             install("scipy")
+            install("reportlab")
         }
     }
 }

@@ -14,6 +14,12 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
+import android.webkit.JavascriptInterface
+import android.content.Context
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class DashboardActivity : ComponentActivity() {
 
@@ -40,6 +46,9 @@ class DashboardActivity : ComponentActivity() {
         settings.allowFileAccessFromFileURLs = true
         settings.allowUniversalAccessFromFileURLs = true
         settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+
+        // Expose Interface for PDF Report Generation
+        webView.addJavascriptInterface(DashboardInterface(this, webView), "Android")
 
         // Optional: ChromeClient for debugging console logs
         webView.webChromeClient = object : WebChromeClient() {
@@ -214,5 +223,99 @@ class DashboardActivity : ComponentActivity() {
         super.onDestroy()
         injectionRunnable?.let { handler.removeCallbacks(it) }
         executorService.shutdown()
+    }
+
+    private fun saveAndNotify(base64result: String) {
+        if (base64result.contains("\"error\"")) {
+            android.util.Log.e("ReactDashboard", "Report Gen Error: $base64result")
+            handler.post {
+                android.widget.Toast.makeText(this@DashboardActivity, "Error generating report", android.widget.Toast.LENGTH_SHORT).show()
+            }
+            return
+        }
+        try {
+            val pdfBytes = android.util.Base64.decode(base64result, android.util.Base64.DEFAULT)
+            val fileName = "reelio_report_${System.currentTimeMillis()}.pdf"
+            
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                val resolver = contentResolver
+                val contentValues = android.content.ContentValues().apply {
+                    put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+                    put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "application/pdf")
+                    put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS)
+                }
+                val uri = resolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
+                if (uri != null) {
+                    resolver.openOutputStream(uri)?.use { outputStream ->
+                        outputStream.write(pdfBytes)
+                    }
+                    handler.post {
+                        android.widget.Toast.makeText(this@DashboardActivity, "Report saved to Downloads", android.widget.Toast.LENGTH_LONG).show()
+                    }
+                }
+            } else {
+                if (androidx.core.content.ContextCompat.checkSelfPermission(this@DashboardActivity, android.Manifest.permission.WRITE_EXTERNAL_STORAGE) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                    androidx.core.app.ActivityCompat.requestPermissions(this@DashboardActivity, arrayOf(android.Manifest.permission.WRITE_EXTERNAL_STORAGE), 112)
+                    handler.post {
+                        android.widget.Toast.makeText(this@DashboardActivity, "Storage permission required. Try again.", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                    return
+                }
+                val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+                if (!downloadsDir.exists()) downloadsDir.mkdirs()
+                val file = java.io.File(downloadsDir, fileName)
+                file.writeBytes(pdfBytes)
+                handler.post {
+                    android.widget.Toast.makeText(this@DashboardActivity, "Report saved to Downloads", android.widget.Toast.LENGTH_LONG).show()
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("ReactDashboard", "File save error: ${e.message}", e)
+            handler.post {
+                android.widget.Toast.makeText(this@DashboardActivity, "Failed to save report to Downloads", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    inner class DashboardInterface(private val mContext: Context, private val webView: WebView) {
+        @JavascriptInterface
+        fun generateReport() {
+            CoroutineScope(Dispatchers.Main).launch {
+                webView.evaluateJavascript("if(window.showReportLoading) window.showReportLoading(true);", null)
+                val result = withContext(Dispatchers.IO) {
+                    try {
+                        val file = File(filesDir, "insta_data.csv")
+                        if (!file.exists() || file.length() < 10) return@withContext "{\"error\": \"No data to generate report.\"}"
+                        val csvContent = file.readText()
+                        if (!Python.isStarted()) {
+                            Python.start(AndroidPlatform(mContext))
+                        }
+                        val py = Python.getInstance()
+                        val hmmModule = py.getModule("reelio_alse")
+                        hmmModule.callAttr("run_report_payload", csvContent).toString()
+                    } catch (e: Exception) {
+                        "{\"error\": \"${e.message}\"}"
+                    }
+                }
+                saveAndNotify(result)
+                webView.evaluateJavascript("if(window.showReportLoading) window.showReportLoading(false);", null)
+            }
+        }
+        
+        @JavascriptInterface
+        fun exportCsv() {
+            // Needed so existing HTML "Export CSV" buttons don't break when embedded in DashboardActivity
+            handler.post {
+                val file = File(filesDir, "insta_data.csv")
+                if (!file.exists()) return@post
+                val uri: android.net.Uri = androidx.core.content.FileProvider.getUriForFile(mContext, "${packageName}.fileprovider", file)
+                val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                    type = "text/csv"
+                    putExtra(android.content.Intent.EXTRA_STREAM, uri as android.os.Parcelable)
+                    addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                mContext.startActivity(android.content.Intent.createChooser(intent, "Share Behavioral Baseline Data"))
+            }
+        }
     }
 }

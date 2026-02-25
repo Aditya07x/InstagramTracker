@@ -27,6 +27,38 @@ import pandas as pd
 # NO scipy.linalg, hmmlearn, sklearn or scipy.stats ALLOWED
 from scipy.optimize import fmin_bfgs, minimize
 
+# Compatibility patch: reportlab calls md5(usedforsecurity=False) which requires Python 3.9+.
+# Chaquopy runs Python 3.8, so we strip the kwarg before it reaches OpenSSL.
+import sys as _sys
+import hashlib as _hashlib
+if _sys.version_info < (3, 9):
+    _orig_md5 = _hashlib.md5
+    def _compat_md5(*args, usedforsecurity=True, **kwargs):
+        return _orig_md5(*args, **kwargs)
+    _hashlib.md5 = _compat_md5
+
+# PDF Report Generation Dependencies
+from reportlab.lib.pagesizes import A4
+from reportlab.lib import colors
+from reportlab.lib.units import mm
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable, PageBreak
+from reportlab.lib.styles import ParagraphStyle
+from reportlab.graphics.shapes import Drawing, Rect, String, Line, Polygon
+from reportlab.graphics.charts.barcharts import VerticalBarChart
+from reportlab.graphics import renderPDF
+import base64
+import io
+
+# Report Color Palette
+CYAN    = colors.HexColor('#00f5ff')
+MAGENTA = colors.HexColor('#ff006e')
+DARK    = colors.HexColor('#0a0a0f')
+DARK2   = colors.HexColor('#0f1a1a')
+GRAY    = colors.HexColor('#1a2a2a')
+DIMTEXT = colors.HexColor('#4a7a7a')
+WHITE   = colors.HexColor('#e0f0f0')
+AMBER   = colors.HexColor('#ffaa00')
+
 EXPECTED_SCHEMA_VERSION = 4
 
 REQUIRED_COLUMNS = [
@@ -1196,6 +1228,7 @@ def run_dashboard_payload(csv_data: str, state_path: str = None) -> str:
                 "avgDwell":            avg_dwell,
                 "timePeriod":          str(time_period),
                 "date":                str(date_str),
+                "startTime":           (lambda col: (lambda ts: ts.strftime('%Y-%m-%dT%H:%M') if (ts is not None and not pd.isna(ts) and ts.year > 1901) else "Unknown")(pd.to_datetime(col, dayfirst=False, errors='coerce')) if 'StartTime' in s_df.columns and pd.notna(s_df['StartTime'].iloc[0]) else "Unknown")(s_df['StartTime'].iloc[0]) if 'StartTime' in s_df.columns else "Unknown",
                 "endTime":             end_time_str,
                 # Interaction data — previously missing from payload entirely
                 "totalLikes":          total_likes,
@@ -1246,6 +1279,674 @@ def run_dashboard_payload(csv_data: str, state_path: str = None) -> str:
         "model_confidence": float(model.compute_model_confidence())
     }
     return json.dumps(output_payload)
+
+
+def _draw_report_background(canvas, doc):
+    W = A4[0]
+    canvas.saveState()
+    canvas.setFillColor(DARK)
+    canvas.rect(0, 0, W, A4[1], fill=1, stroke=0)
+
+    # Header — suppressed on cover page (page 1 already has "REELIO // ALSE" twice)
+    if doc.page > 1:
+        canvas.setFont("Courier-Bold", 10)
+        canvas.setFillColor(CYAN)
+        canvas.drawString(15*mm, A4[1] - 10*mm, "REELIO // ALSE")
+        canvas.setFont("Courier", 9)
+        canvas.setFillColor(DIMTEXT)
+        canvas.drawCentredString(W/2.0, A4[1] - 10*mm, "BEHAVIORAL INTELLIGENCE REPORT")
+        canvas.drawRightString(W - 15*mm, A4[1] - 10*mm, f"PAGE {doc.page}")
+
+    # Footer separator + disclaimer — runs on ALL pages
+    canvas.setStrokeColor(colors.HexColor('#1a2a2a'))
+    canvas.setLineWidth(0.3)
+    canvas.line(15*mm, 14*mm, W - 15*mm, 14*mm)
+    canvas.setFont("Courier", 7)
+    canvas.setFillColor(DIMTEXT)
+    canvas.drawCentredString(W/2.0, 9*mm,
+        "Behavioral data never leaves your device  ·  REELIO ALSE v3.0")
+    canvas.restoreState()
+
+
+def _get_explanation_box(text):
+    style = ParagraphStyle(
+        name='Explanation',
+        fontName='Courier',
+        fontSize=8,
+        textColor=DIMTEXT,
+        leading=10,
+        backColor=DARK2,
+        borderColor=GRAY,
+        borderWidth=1,
+        borderPadding=10,
+        spaceBefore=10,
+        spaceAfter=15
+    )
+    return Paragraph(text, style)
+
+
+def _section_header(title):
+    style = ParagraphStyle(
+        name='SectionHeader',
+        fontName='Courier-Bold',
+        fontSize=12,
+        textColor=CYAN,
+        leading=14,
+        borderPadding=(0,0,0,5),
+        borderColor=CYAN,
+        borderWidth=3,
+        borderLeft=True,
+        spaceBefore=20,
+        spaceAfter=10
+    )
+    return Paragraph(title, style)
+
+
+# In-memory cache: avoids re-generating the PDF when nothing new has been logged
+_report_cache: str = None          # stores the last base64 PDF string
+_report_session_count: int = -1    # session count at last generation
+
+
+def run_report_payload(json_data: str, csv_data: str = "") -> str:
+    """
+    Generates full behavioral intelligence PDF report from pre-computed dashboard JSON.
+    Accepts json_data (output of run_dashboard_payload) and optionally raw csv_data
+    for the verbose log table. Returns base64-encoded PDF or JSON error string.
+    """
+    try:
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(
+            buffer, pagesize=A4,
+            rightMargin=15*mm, leftMargin=15*mm,
+            topMargin=20*mm, bottomMargin=20*mm
+        )
+
+        if not json_data or len(json_data.strip()) < 5:
+            raise ValueError("Empty JSON payload. Run a session first.")
+
+        payload = json.loads(json_data)
+        sessions = payload.get("sessions", [])
+        if not sessions:
+            raise ValueError("No sessions in payload. Scroll some Reels first!")
+
+        total_sessions = len(sessions)
+        total_reels = sum(s.get("nReels", 0) for s in sessions)
+        A_mat = payload.get("model_parameters", {}).get("transition_matrix", [[0.8,0.2],[0.2,0.8]])
+        model_confidence = float(payload.get("model_confidence", 0.5))
+        circadian_data = payload.get("circadian", [])
+
+        # ── Cache hit check ──
+        global _report_cache, _report_session_count
+        if _report_cache and _report_session_count == total_sessions:
+            return _report_cache
+
+        # Dates/times come from startTime field in each session — no csv_data needed
+        try:
+            start_times = []
+            for s in sessions:
+                st_raw = s.get("startTime", "")
+                if st_raw and st_raw != "Unknown":
+                    try:
+                        start_times.append(pd.to_datetime(st_raw))
+                    except:
+                        pass
+            if start_times:
+                first_date = min(start_times).strftime('%Y-%m-%d')
+                last_date = max(start_times).strftime('%Y-%m-%d')
+                unique_dates = set(dt.strftime('%Y-%m-%d') for dt in start_times)
+                days_monitored = len(unique_dates)
+            else:
+                first_date, last_date, days_monitored = 'Unknown', 'Unknown', 1
+        except:
+            first_date, last_date, days_monitored = 'Unknown', 'Unknown', 1
+
+        # ── Doom stats from sessions ──
+        doom_sessions = 0
+        doom_details = []
+        total_likes = sum(s.get("totalLikes", 0) for s in sessions)
+        total_comments = sum(s.get("totalComments", 0) for s in sessions)
+        total_shares = sum(s.get("totalShares", 0) for s in sessions)
+        total_saves = sum(s.get("totalSaves", 0) for s in sessions)
+        passive_sessions = sum(1 for s in sessions if (s.get("totalLikes",0)+s.get("totalComments",0)+s.get("totalShares",0)+s.get("totalSaves",0)) == 0)
+
+        component_names = ['Session Length', 'Exit Conflict', 'Rapid Reentry',
+                           'Scroll Automaticity', 'Dwell Collapse', 'Rewatch Compulsion', 'Environment']
+
+        for idx_s, s in enumerate(sessions):
+            st = float(s.get("S_t", 0))
+            if st >= 0.50:
+                doom_sessions += 1
+                # Bug 3 — TIME from startTime field
+                try:
+                    st_raw = s.get("startTime", "") or ""
+                    dt_parsed = pd.to_datetime(st_raw, errors='coerce') if st_raw not in ("", "Unknown") else None
+                    if dt_parsed is None or pd.isna(dt_parsed) or dt_parsed.year < 2000:
+                        raise ValueError("bad date")
+                    time_str = dt_parsed.strftime('%H:%M')
+                    d_str = dt_parsed.strftime('%b %d')
+                except:
+                    time_str = 'N/A'
+                    d_str = 'N/A'
+                # Bug 5 — TOP DRIVER proxy from JSON fields
+                try:
+                    n_r = s.get("nReels", 1)
+                    avg_d = float(s.get("avgDwell", s.get("meanDwell", 5.0)))
+                    st_val = float(s.get("S_t", 0))
+                    component_values = [
+                        min(n_r / 30.0, 1.0),                       # Session Length
+                        min(st_val * 1.5, 1.0),                      # Doom Intensity proxy
+                        0.3 if (avg_d < 2.0) else 0.0,              # Rapid Re-entry (low dwell = short gap)
+                        max(0.0, 1.0 - (avg_d / 8.0)),              # Scroll Automaticity
+                        max(0.0, 1.0 - (avg_d / 12.0)),             # Dwell Collapse
+                        0.0, 0.0
+                    ]
+                    top_driver_idx = int(np.argmax(component_values))
+                    top_driver = component_names[top_driver_idx] if max(component_values) > 0.1 else "Session Length"
+                except:
+                    top_driver = 'N/A'
+                doom_details.append([d_str, time_str, str(s.get("nReels", 0)),
+                                      f"{s.get('avgDwell', s.get('meanDwell', 0)):.1f}s",
+                                      top_driver, f"{st:.2f}"])
+
+        doom_fraction = doom_sessions / max(1, total_sessions)
+        if doom_fraction > 0.3: overall_risk, risk_color = "ELEVATED RISK", MAGENTA
+        elif doom_fraction > 0.1: overall_risk, risk_color = "BORDERLINE", AMBER
+        else: overall_risk, risk_color = "LOW RISK", CYAN
+
+        # ── Fingerprint stats ──
+        avg_len = total_reels / max(1, total_sessions)
+        avg_dwell_vals = [s.get("avgDwell", s.get("meanDwell", s.get("avg_dwell", 0))) for s in sessions]
+        avg_dwell = sum(avg_dwell_vals) / max(1, len(avg_dwell_vals))
+        passive_rate = passive_sessions / max(1, total_sessions)
+        try:
+            peak_hr_counts = {}
+            for s in sessions:
+                st_raw = s.get("startTime", "")
+                if st_raw and st_raw != "Unknown":
+                    hr = pd.to_datetime(st_raw).hour
+                    peak_hr_counts[hr] = peak_hr_counts.get(hr, 0) + 1
+            if peak_hr_counts:
+                peak_hr = max(peak_hr_counts, key=peak_hr_counts.get)
+                peak_str = f"{peak_hr%12 or 12}{'PM' if peak_hr>=12 else 'AM'}"
+            else:
+                peak_str = "???"
+        except:
+            peak_str = "???"
+
+        # ── Model matrix ──
+        A = np.array(A_mat)
+
+        # --- DOCUMENT BUILDING ---
+        PW = A4[0] - 2 * 15 * mm   # 510pt — usable page width for all Drawing widths
+        elements = []
+        TITLE_STYLE  = ParagraphStyle('Title',  fontName='Courier-Bold', fontSize=32, textColor=CYAN, alignment=1, spaceAfter=10)
+        SUB_STYLE    = ParagraphStyle('Sub',    fontName='Courier',      fontSize=14, textColor=WHITE, alignment=1, spaceAfter=20, letterSpacing=2)
+        MONO_CENTER  = ParagraphStyle('MC',     fontName='Courier',      fontSize=10, textColor=WHITE, alignment=1)
+        BODY_STYLE   = ParagraphStyle('Body',   fontName='Courier',      fontSize=9,  textColor=WHITE, leading=13, spaceBefore=4, spaceAfter=6)
+        CALLOUT_STYLE = ParagraphStyle('Callout', fontName='Courier-Bold', fontSize=10, textColor=WHITE,
+                                       leading=14, backColor=DARK2, borderColor=AMBER, borderWidth=1,
+                                       borderPadding=10, spaceBefore=8, spaceAfter=10)
+
+        # ════════════════════════════════════════════════════
+        # PAGE 1 — COVER
+        # ════════════════════════════════════════════════════
+        elements.append(Spacer(1, 40*mm))
+        elements.append(Paragraph("REELIO // ALSE", TITLE_STYLE))
+        elements.append(Paragraph("BEHAVIORAL INTELLIGENCE REPORT", SUB_STYLE))
+        elements.append(HRFlowable(width="100%", thickness=1, color=CYAN, spaceAfter=20))
+        elements.append(Paragraph(f"REPORT PERIOD: {first_date} → {last_date}", MONO_CENTER))
+        elements.append(Spacer(1, 20*mm))
+
+        # Risk badge — centered using PW
+        d_cover = Drawing(PW, 60)
+        d_cover.add(Rect(PW/2 - 100, 0, 200, 50, rx=10, ry=10, fillColor=DARK2, strokeColor=risk_color, strokeWidth=2))
+        d_cover.add(String(PW/2, 20, overall_risk, fontName='Courier-Bold', fontSize=20, fillColor=risk_color, textAnchor='middle'))
+        elements.append(d_cover)
+        elements.append(Spacer(1, 10*mm))
+        elements.append(Paragraph(f"{total_sessions} SESSIONS  ·  {total_reels} REELS  ·  {days_monitored} DAYS MONITORED", MONO_CENTER))
+        elements.append(Spacer(1, 30*mm))
+        elements.append(_get_explanation_box(
+            "This report was generated by the REELIO Adaptive Latent State Engine (ALSE), a private on-device "
+            "Hidden Markov Model trained exclusively on your behavioral patterns. No data was sent to any server. "
+            "The doom probability scores reflect the likelihood that your scrolling shifted from intentional browsing "
+            "into automatic, compulsive consumption — a state associated with reduced volitional control."
+        ))
+
+        # ════════════════════════════════════════════════════
+        # PAGE 2 — YOUR BEHAVIORAL PROFILE
+        # ════════════════════════════════════════════════════
+        elements.append(PageBreak())
+        elements.append(_section_header("YOUR BEHAVIORAL PROFILE"))
+        elements.append(_get_explanation_box(
+            "Your behavioral fingerprint is the personal baseline ALSE has learned from your sessions. Unlike population "
+            "averages, these numbers are calibrated to you — the model flags deviations from your own patterns, not anyone else's."
+        ))
+
+        avg_len      = total_reels / max(1, total_sessions)
+        avg_dwell_vals = [s.get("avgDwell", s.get("meanDwell", s.get("avg_dwell", 0))) for s in sessions]
+        avg_dwell    = sum(avg_dwell_vals) / max(1, len(avg_dwell_vals))
+        passive_rate = passive_sessions / max(1, total_sessions)
+
+        # 4 stat boxes in Drawing(PW, 160) — two rows of two, each box = PW/2 - 10 wide
+        bw = PW / 2 - 10
+        d_profile = Drawing(PW, 160)
+        stat_boxes = [
+            (0,         80, str(total_reels),          "TOTAL REELS WATCHED"),
+            (PW/2 + 10, 80, str(doom_sessions),         "DOOM SESSIONS"),
+            (0,         10, f"{avg_dwell:.1f}s",        "AVG DWELL TIME"),
+            (PW/2 + 10, 10, f"{passive_rate*100:.0f}%", "PASSIVE CONSUMPTION"),
+        ]
+        for bx, by, bval, blabel in stat_boxes:
+            d_profile.add(Rect(bx, by, bw, 60, rx=6, ry=6, fillColor=DARK2, strokeColor=CYAN, strokeWidth=1))
+            d_profile.add(Rect(bx, by, bw, 4, fillColor=CYAN, strokeColor=None))           # accent bar at bottom
+            d_profile.add(String(bx + bw/2, by + 35, bval,   fontName='Courier-Bold', fontSize=22, fillColor=CYAN,    textAnchor='middle'))
+            d_profile.add(String(bx + bw/2, by + 15, blabel, fontName='Courier',      fontSize=7,  fillColor=DIMTEXT, textAnchor='middle'))
+        elements.append(d_profile)
+        elements.append(Spacer(1, 5*mm))
+
+        # Personalized insight sentence
+        try:
+            doom_avg_reels  = sum(s.get("nReels", 0) for s in sessions if float(s.get("S_t",0)) >= 0.5) / max(1, doom_sessions)
+            casual_avg_reels = sum(s.get("nReels", 0) for s in sessions if float(s.get("S_t",0)) < 0.5) / max(1, total_sessions - doom_sessions)
+            ratio = doom_avg_reels / max(0.01, casual_avg_reels)
+            elements.append(Paragraph(
+                f"Your average doom session is <b>{ratio:.1f}×</b> longer than your casual sessions "
+                f"({doom_avg_reels:.0f} reels vs {casual_avg_reels:.0f} reels). "
+                f"Passive consumption accounts for <b>{passive_rate*100:.0f}%</b> of all your sessions.",
+                BODY_STYLE
+            ))
+        except:
+            pass
+
+        # ════════════════════════════════════════════════════
+        # PAGE 3 — DOOM TREND (most actionable)
+        # ════════════════════════════════════════════════════
+        elements.append(PageBreak())
+        elements.append(_section_header("DOOM TREND"))
+        elements.append(_get_explanation_box(
+            "The rolling 5-session average of your doom score answers the question: am I getting better or worse? "
+            "Each point is the mean S_t across 5 consecutive sessions. Downward trend = improving behavioral control."
+        ))
+
+        st_series = [float(s.get("S_t", 0)) for s in sessions]
+        # Rolling 5-session average
+        rolling5 = []
+        for i in range(len(st_series)):
+            window = st_series[max(0, i-4):i+1]
+            rolling5.append(sum(window)/len(window))
+
+        spark_draw = Drawing(PW, 120)
+        n_pts = len(rolling5)
+        if n_pts > 1:
+            x_step = (PW - 20) / max(n_pts - 1, 1)
+            # Threshold line at 0.5
+            spark_draw.add(Line(10, 10 + 0.5*90, PW - 10, 10 + 0.5*90,
+                                strokeColor=MAGENTA, strokeWidth=0.5, strokeDashArray=[3,3]))
+            spark_draw.add(String(PW - 8, 10 + 0.5*90 + 2, "0.5", fontName='Courier', fontSize=6,
+                                  fillColor=MAGENTA, textAnchor='end'))
+            for i in range(n_pts - 1):
+                x1 = 10 + i * x_step
+                x2 = 10 + (i+1) * x_step
+                y1 = 10 + rolling5[i]   * 90
+                y2 = 10 + rolling5[i+1] * 90
+                col_sp = MAGENTA if rolling5[i] > 0.5 else AMBER if rolling5[i] > 0.3 else CYAN
+                spark_draw.add(Line(x1, y1, x2, y2, strokeColor=col_sp, strokeWidth=2))
+            # End dot
+            last_x = 10 + (n_pts - 1) * x_step
+            last_y = 10 + rolling5[-1] * 90
+            spark_draw.add(Rect(last_x - 3, last_y - 3, 6, 6, fillColor=CYAN, strokeColor=None))
+            spark_draw.add(String(last_x, last_y + 5, f"{rolling5[-1]:.2f}",
+                                  fontName='Courier', fontSize=7, fillColor=CYAN, textAnchor='middle'))
+        else:
+            spark_draw.add(String(PW/2, 60, "Not enough sessions for trend",
+                                  fontName='Courier', fontSize=9, fillColor=DIMTEXT, textAnchor='middle'))
+        elements.append(spark_draw)
+
+        # Trend callout
+        try:
+            if len(rolling5) >= 6:
+                early_avg = sum(rolling5[:len(rolling5)//2]) / max(1, len(rolling5)//2)
+                late_avg  = sum(rolling5[len(rolling5)//2:]) / max(1, len(rolling5) - len(rolling5)//2)
+                pct_change = (late_avg - early_avg) / max(0.01, early_avg) * 100
+                if pct_change < -5:
+                    trend_label = f"↓ IMPROVING — down {abs(pct_change):.0f}% over the monitored period"
+                    t_color = '#00e0e0'
+                elif pct_change > 5:
+                    trend_label = f"↑ WORSENING — up {pct_change:.0f}% over the monitored period"
+                    t_color = '#ff0055'
+                else:
+                    trend_label = f"→ STABLE — less than 5% change over the monitored period"
+                    t_color = '#ffaa00'
+                trend_box = Drawing(PW, 40)
+                trend_box.add(Rect(0, 5, PW, 30, rx=5, ry=5, fillColor=DARK2, strokeColor=colors.HexColor(t_color), strokeWidth=1.5))
+                trend_box.add(String(PW/2, 17, f"TREND: {trend_label}", fontName='Courier-Bold',
+                                     fontSize=9, fillColor=colors.HexColor(t_color), textAnchor='middle'))
+                elements.append(trend_box)
+        except:
+            pass
+
+        # Also show the capped doom table for reference
+        elements.append(Spacer(1, 5*mm))
+        elements.append(_section_header("DOOM SESSION LOG"))
+        doom_details_capped = doom_details[-10:] if len(doom_details) > 10 else doom_details
+        t_data = [["DATE", "TIME", "REELS", "AVG DWELL", "TOP DRIVER", "S_t"]] + doom_details_capped
+        ts = TableStyle([
+            ('BACKGROUND',   (0,0), (-1,0), CYAN),
+            ('TEXTCOLOR',    (0,0), (-1,0), DARK),
+            ('FONTNAME',     (0,0), (-1,0), 'Courier-Bold'),
+            ('FONTSIZE',     (0,0), (-1,-1), 8),
+            ('ALIGN',        (0,0), (-1,-1), 'CENTER'),
+            ('BOTTOMPADDING',(0,0), (-1,-1), 5),
+            ('TOPPADDING',   (0,0), (-1,-1), 5),
+            ('GRID',         (0,0), (-1,-1), 0.5, GRAY),
+        ])
+        for i in range(1, len(t_data)):
+            ts.add('BACKGROUND', (0,i), (-1,i), DARK2 if i%2==0 else DARK)
+            ts.add('TEXTCOLOR',  (0,i), (-1,i), WHITE)
+            try:
+                sv = float(t_data[i][5])
+                ts.add('TEXTCOLOR', (5,i),(5,i), MAGENTA if sv>0.8 else AMBER if sv>0.5 else CYAN)
+            except: pass
+        t = Table(t_data, colWidths=[22*mm, 20*mm, 15*mm, 22*mm, 38*mm, 18*mm])
+        t.setStyle(ts)
+        elements.append(t)
+
+        # ════════════════════════════════════════════════════
+        # PAGE 4 — DAY & TIME VULNERABILITY
+        # ════════════════════════════════════════════════════
+        elements.append(PageBreak())
+        elements.append(_section_header("DAY & TIME VULNERABILITY"))
+        elements.append(_get_explanation_box(
+            "Left: average doom score by day of week. Right: doom breakdown by time-of-day versus weekday/weekend — "
+            "revealing whether late evenings or weekends are the compounding factor for you specifically."
+        ))
+
+        day_names_full = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']
+        day_doom = {d: [] for d in range(7)}
+        # time_period × week_half grid: rows=Morning/Afternoon/Evening/Night, cols=Weekday/Weekend
+        tp_grid = {'Morning':{'Weekday':[],'Weekend':[]}, 'Afternoon':{'Weekday':[],'Weekend':[]},
+                   'Evening':{'Weekday':[],'Weekend':[]}, 'Night':{'Weekday':[],'Weekend':[]}}
+        for s in sessions:
+            try:
+                st_raw = s.get("startTime","") or ""
+                if st_raw and st_raw not in ("","Unknown"):
+                    dt_s = pd.to_datetime(st_raw, errors='coerce')
+                    if dt_s is not None and not pd.isna(dt_s) and dt_s.year >= 2000:
+                        dow = dt_s.weekday()
+                        day_doom[dow].append(float(s.get("S_t",0)))
+                        hh = dt_s.hour
+                        tp = 'Morning' if hh < 12 else 'Afternoon' if hh < 17 else 'Evening' if hh < 22 else 'Night'
+                        wh = 'Weekend' if dow >= 5 else 'Weekday'
+                        tp_grid[tp][wh].append(float(s.get("S_t",0)))
+            except: pass
+
+        weekly_avgs = [sum(day_doom[d])/len(day_doom[d]) if day_doom[d] else 0.0 for d in range(7)]
+
+        d_vuln = Drawing(PW, 180)
+        half = PW / 2 - 10
+
+        # Left: day-of-week bars
+        dw = half / 7
+        for di, (dname, davg) in enumerate(zip(day_names_full, weekly_avgs)):
+            col_d = MAGENTA if davg > 0.5 else AMBER if davg > 0.3 else CYAN
+            bh = max(4, davg * 100)
+            d_vuln.add(Rect(di*dw + 2, 30, dw - 4, bh, fillColor=col_d, strokeColor=None))
+            d_vuln.add(String(di*dw + dw/2, 18, dname, fontName='Courier', fontSize=7, fillColor=DIMTEXT, textAnchor='middle'))
+            if davg > 0:
+                d_vuln.add(String(di*dw + dw/2, 32+bh, f"{davg:.2f}", fontName='Courier', fontSize=6, fillColor=col_d, textAnchor='middle'))
+        # Divider
+        d_vuln.add(Line(half + 8, 10, half + 8, 170, strokeColor=GRAY, strokeWidth=0.5))
+
+        # Right: 4×2 grid (time period × week half)
+        tp_labels  = ['Morning','Afternoon','Evening','Night']
+        wh_labels  = ['Weekday','Weekend']
+        cx = half + 20
+        cell_w = (PW - cx - 5) / 2
+        cell_h = 30
+        for ri, tp in enumerate(tp_labels):
+            for ci, wh in enumerate(wh_labels):
+                vals = tp_grid[tp][wh]
+                avg_val = sum(vals)/len(vals) if vals else 0.0
+                col_c = MAGENTA if avg_val > 0.6 else AMBER if avg_val > 0.3 else DARK2
+                gx = cx + ci * (cell_w + 4)
+                gy = 140 - ri * (cell_h + 4)
+                d_vuln.add(Rect(gx, gy, cell_w, cell_h, fillColor=col_c, strokeColor=GRAY, strokeWidth=0.5))
+                d_vuln.add(String(gx + cell_w/2, gy + cell_h/2 + 3, f"{avg_val:.2f}" if vals else "—",
+                                  fontName='Courier-Bold', fontSize=8, fillColor=WHITE, textAnchor='middle'))
+                if ri == 0:
+                    d_vuln.add(String(gx + cell_w/2, gy + cell_h + 5, wh[:3],
+                                      fontName='Courier', fontSize=6, fillColor=DIMTEXT, textAnchor='middle'))
+            d_vuln.add(String(cx - 4, 140 - ri*(cell_h+4) + cell_h/2 + 3, tp[:3],
+                              fontName='Courier', fontSize=6, fillColor=DIMTEXT, textAnchor='end'))
+        elements.append(d_vuln)
+
+        try:
+            if any(v > 0 for v in weekly_avgs):
+                worst_d = day_names_full[int(np.argmax(weekly_avgs))]
+                best_candidates = [(i,v) for i,v in enumerate(weekly_avgs) if v > 0]
+                best_d  = day_names_full[min(best_candidates, key=lambda x: x[1])[0]] if best_candidates else "N/A"
+                elements.append(Paragraph(
+                    f"You scroll most compulsively on <b>{worst_d}s</b> (avg doom: {max(weekly_avgs):.2f}). "
+                    f"Your lowest-risk day is <b>{best_d}</b> (avg doom: {min(v for v in weekly_avgs if v>0):.2f}).",
+                    BODY_STYLE
+                ))
+        except: pass
+
+        # ════════════════════════════════════════════════════
+        # PAGE 5 — THE TRAP (asymmetry)
+        # ════════════════════════════════════════════════════
+        elements.append(PageBreak())
+        elements.append(_section_header("THE TRAP: ADDICTION ASYMMETRY"))
+        elements.append(_get_explanation_box(
+            "The HMM transition matrix encodes a structural asymmetry: entering doom state is faster than escaping it. "
+            "This is not a personal failing — it is the algorithm's mathematical edge over your volition."
+        ))
+
+        # Arrow/bar chart showing entry rate vs escape rate
+        q_enter = float(A[0][1])   # C->D probability
+        q_escape = float(A[1][0])  # D->C probability
+        d_trap = Drawing(PW, 100)
+        # Entry bar
+        entry_w = min(q_enter * PW * 0.8, PW - 40)
+        escape_w = min(q_escape * PW * 0.8, PW - 40)
+        d_trap.add(String(0, 80, "ENTRY RATE  (Casual → Doom per session)", fontName='Courier', fontSize=8, fillColor=DIMTEXT))
+        d_trap.add(Rect(0, 65, entry_w, 12, fillColor=MAGENTA, strokeColor=None))
+        d_trap.add(String(entry_w + 4, 69, f"{q_enter:.3f}", fontName='Courier-Bold', fontSize=9, fillColor=MAGENTA))
+        d_trap.add(String(0, 45, "ESCAPE RATE (Doom → Casual per session)", fontName='Courier', fontSize=8, fillColor=DIMTEXT))
+        d_trap.add(Rect(0, 30, escape_w, 12, fillColor=CYAN, strokeColor=None))
+        d_trap.add(String(escape_w + 4, 34, f"{q_escape:.3f}", fontName='Courier-Bold', fontSize=9, fillColor=CYAN))
+        d_trap.add(String(0, 10, f"Asymmetry ratio: {q_enter/max(q_escape, 0.001):.1f}× harder to escape than enter",
+                          fontName='Courier', fontSize=8, fillColor=AMBER))
+        elements.append(d_trap)
+
+        # Doom persistence — reels until statistically free
+        doom_persistence = 1.0 / max(1e-9, float(A[1][0]))   # expected reels in doom before escape
+        asymmetry_ratio  = q_enter / max(q_escape, 0.001)
+        elements.append(Paragraph(
+            f"Once captured, you need to scroll through approximately "
+            f"<b>~{doom_persistence:.0f} reels</b> before statistically breaking free.",
+            BODY_STYLE
+        ))
+        elements.append(Paragraph(
+            f"You enter doom <b>{asymmetry_ratio:.1f}× faster</b> than you escape it — "
+            f"this is the algorithm's structural advantage over your volitional control.",
+            BODY_STYLE
+        ))
+        elements.append(Spacer(1, 5*mm))
+        # Transition matrix table
+        mt_data = [
+            ["TRANSITION", "→ CASUAL", "→ DOOM"],
+            ["Casual",  f"{A[0][0]:.3f}", f"{A[0][1]:.3f}"],
+            ["Doom",    f"{A[1][0]:.3f}", f"{A[1][1]:.3f}"]
+        ]
+        mts = TableStyle([
+            ('BACKGROUND',  (0,0), (-1,0), GRAY),   ('TEXTCOLOR', (0,0), (-1,0), WHITE),
+            ('BACKGROUND',  (0,1), (0,-1), GRAY),   ('TEXTCOLOR', (0,1), (0,-1), WHITE),
+            ('BACKGROUND',  (1,1), (1,1), CYAN),    ('BACKGROUND', (2,1), (2,1), AMBER),
+            ('BACKGROUND',  (1,2), (1,2), CYAN),    ('BACKGROUND', (2,2), (2,2), MAGENTA),
+            ('TEXTCOLOR',   (1,1), (-1,-1), DARK),
+            ('FONTNAME',    (0,0), (-1,-1), 'Courier-Bold'),
+            ('FONTSIZE',    (0,0), (-1,-1), 10),
+            ('ALIGN',       (0,0), (-1,-1), 'CENTER'),
+            ('GRID',        (0,0), (-1,-1), 1, DARK),
+        ])
+        mt_t = Table(mt_data, colWidths=[40*mm, 35*mm, 35*mm])
+        mt_t.setStyle(mts)
+        elements.append(mt_t)
+
+        # ════════════════════════════════════════════════════
+        # PAGE 6 — SESSION LENGTH → DOOM THRESHOLD
+        # ════════════════════════════════════════════════════
+        elements.append(PageBreak())
+        elements.append(_section_header("SESSION LENGTH → DOOM THRESHOLD"))
+        elements.append(_get_explanation_box(
+            "Doom probability grouped by session length reveals your personal tipping point — "
+            "the reel count where casual browsing reliably flips into compulsive scrolling."
+        ))
+
+        # Bucket sessions: short (<15), medium (15-40), long (>40)
+        buckets = {'<15 reels': [], '15–40 reels': [], '>40 reels': []}
+        for s in sessions:
+            nr = s.get("nReels", 0)
+            st_v = float(s.get("S_t", 0))
+            if nr < 15: buckets['<15 reels'].append(st_v)
+            elif nr <= 40: buckets['15–40 reels'].append(st_v)
+            else: buckets['>40 reels'].append(st_v)
+
+        d_thresh = Drawing(PW, 120)
+        bkt_items = list(buckets.items())
+        bkt_w = PW / len(bkt_items)
+        for bi, (blabel, bvals) in enumerate(bkt_items):
+            bavg = sum(bvals)/len(bvals) if bvals else 0.0
+            col_b = MAGENTA if bavg > 0.5 else AMBER if bavg > 0.3 else CYAN
+            bh = max(4, bavg * 80)
+            d_thresh.add(Rect(bi*bkt_w + 10, 30, bkt_w - 20, bh, fillColor=col_b, strokeColor=None))
+            d_thresh.add(String(bi*bkt_w + bkt_w/2, 18, blabel, fontName='Courier', fontSize=8, fillColor=DIMTEXT, textAnchor='middle'))
+            d_thresh.add(String(bi*bkt_w + bkt_w/2, 8,  f"n={len(bvals)}", fontName='Courier', fontSize=7, fillColor=DIMTEXT, textAnchor='middle'))
+            d_thresh.add(String(bi*bkt_w + bkt_w/2, 32+bh, f"{bavg:.0%}", fontName='Courier-Bold', fontSize=10, fillColor=col_b, textAnchor='middle'))
+        elements.append(d_thresh)
+
+        try:
+            short_avg  = sum(buckets['<15 reels'])/len(buckets['<15 reels']) if buckets['<15 reels'] else 0
+            medium_avg = sum(buckets['15–40 reels'])/len(buckets['15–40 reels']) if buckets['15–40 reels'] else 0
+            long_avg   = sum(buckets['>40 reels'])/len(buckets['>40 reels']) if buckets['>40 reels'] else 0
+            elements.append(Paragraph(
+                f"Sessions under 15 reels: <b>{short_avg:.0%}</b> doom rate. "
+                f"Sessions 15–40 reels: <b>{medium_avg:.0%}</b>. "
+                f"Sessions over 40 reels: <b>{long_avg:.0%}</b>. "
+                f"Your behavioral threshold appears around "
+                f"<b>{'15' if medium_avg > short_avg + 0.15 else '40'} reels</b>.",
+                BODY_STYLE
+            ))
+        except: pass
+
+        # ════════════════════════════════════════════════════
+        # PAGE 7 — CIRCADIAN RISK MAP
+        # ════════════════════════════════════════════════════
+        elements.append(PageBreak())
+        elements.append(_section_header("CIRCADIAN RISK MAP"))
+        elements.append(_get_explanation_box(
+            "Your circadian doom profile reveals when during the day you are most vulnerable to capture. "
+            "Late-night sessions carry elevated risk due to reduced prefrontal inhibition — "
+            "the shaded band marks your likely sleep window where these factors compound."
+        ))
+
+        n_bars  = len(circadian_data) if circadian_data else 1
+        bar_w   = PW / max(n_bars, 1)      # correct: 12 entries fills full PW
+        circ_h  = 100
+        circ_drawing = Drawing(PW, circ_h + 30)
+        for ci, entry in enumerate(circadian_data):
+            doom_val = float(entry.get('doom', 0))
+            col = MAGENTA if doom_val > 0.6 else AMBER if doom_val > 0.3 else CYAN
+            bh  = max(4, doom_val * circ_h * 0.8)
+            circ_drawing.add(Rect(ci * bar_w, 25, bar_w - 2, bh, fillColor=col, strokeColor=None))
+            try:
+                hh = int(entry.get('h', ci*2))
+            except:
+                hh = ci * 2
+            label = f"{hh%12 or 12}{'a' if hh < 12 else 'p'}"
+            circ_drawing.add(String(ci*bar_w + bar_w/2, 13, label, fontName='Courier', fontSize=6,
+                                    fillColor=DIMTEXT, textAnchor='middle'))
+        if not circadian_data:
+            circ_drawing.add(String(PW/2, 55, 'No circadian data yet',
+                                    fontName='Courier', fontSize=9, fillColor=DIMTEXT, textAnchor='middle'))
+        elements.append(circ_drawing)
+
+        # Riskiest/safest callout
+        try:
+            if circadian_data:
+                sorted_circ = sorted(circadian_data, key=lambda x: float(x.get('doom',0)))
+                def _hr_range(h_raw):
+                    hh = int(h_raw)
+                    h2 = (hh + 2) % 24
+                    return f"{hh%12 or 12}{'AM' if hh<12 else 'PM'}–{h2%12 or 12}{'AM' if h2<12 else 'PM'}"
+                safe_str    = _hr_range(sorted_circ[0].get('h', 0))
+                riskiest_str = _hr_range(sorted_circ[-1].get('h', 12))
+                elements.append(Paragraph(
+                    f"⚠ Riskiest window: {riskiest_str}    ✓ Safest window: {safe_str}",
+                    CALLOUT_STYLE
+                ))
+        except: pass
+
+        # ════════════════════════════════════════════════════
+        # PAGE 8 — NEURAL MODEL CARD
+        # ════════════════════════════════════════════════════
+        elements.append(PageBreak())
+        elements.append(_section_header("NEURAL MODEL CARD"))
+        elements.append(_get_explanation_box(
+            "The ALSE model learns continuously from your sessions. Model confidence reflects how well the two "
+            "behavioral states (casual and doom) have separated. After ~20 sessions it becomes meaningfully personalized."
+        ))
+
+        conf = model_confidence
+        status = 'FULLY CALIBRATED' if conf >= 0.70 else 'LEARNING' if conf >= 0.40 else 'INITIALIZING'
+        d_conf = Drawing(PW, 50)
+        d_conf.add(String(0, 35, f"MODEL CONFIDENCE: {conf*100:.0f}%  —  {status}", fontName='Courier-Bold', fontSize=10, fillColor=CYAN))
+        d_conf.add(Rect(0, 15, PW, 10, fillColor=DARK2, strokeColor=GRAY))
+        d_conf.add(Rect(0, 15, PW * conf, 10, fillColor=CYAN, strokeColor=None))
+        d_conf.add(String(0, 0, f"Based on {total_sessions} sessions", fontName='Courier', fontSize=8, fillColor=DIMTEXT))
+        elements.append(d_conf)
+        elements.append(Spacer(1, 8*mm))
+
+        # 3 "What Your Data Says" bullets
+        try:
+            doom_inertia = float(A[1][1])
+            first_10_doom = sum(float(s.get("S_t",0)) for s in sessions[:10]) / min(10, max(1,len(sessions)))
+            last_10_doom  = sum(float(s.get("S_t",0)) for s in sessions[-10:]) / min(10, max(1,len(sessions)))
+            delta_pct = (last_10_doom - first_10_doom) / max(0.01, first_10_doom) * 100
+            trend_word = "worsened" if delta_pct > 5 else "improved" if delta_pct < -5 else "stayed stable"
+            late_sessions = [s for s in sessions if (lambda st: (lambda dt: dt is not None and not pd.isna(dt) and dt.hour >= 22)(pd.to_datetime(st, errors='coerce')) if st and st not in ("","Unknown") else False)(s.get("startTime",""))]
+            late_doom_rate = sum(1 for s in late_sessions if float(s.get("S_t",0)) >= 0.5) / max(1, len(late_sessions))
+
+            bullets = [
+                f"Model confidence: <b>{conf*100:.0f}%</b> — {status.lower()}. Based on {total_sessions} sessions.",
+                f"Doom inertia: <b>{doom_inertia*100:.0f}%</b> — once captured, you stay in the doom state on "
+                f"{doom_inertia*100:.0f}% of subsequent reels within that session.",
+                f"Your escape rate has <b>{trend_word}</b> since your first 10 sessions "
+                f"(doom score: {first_10_doom:.2f} → {last_10_doom:.2f}).",
+            ]
+            if late_sessions:
+                bullets.append(
+                    f"Late-night doom rate (after 10 PM): <b>{late_doom_rate*100:.0f}%</b> "
+                    f"vs {doom_fraction*100:.0f}% overall — "
+                    f"{'↑ elevated' if late_doom_rate > doom_fraction else '↓ similar'} vulnerability."
+                )
+            for b in bullets:
+                elements.append(Paragraph(f"• {b}", BODY_STYLE))
+        except:
+            pass
+
+        doc.build(elements, onFirstPage=_draw_report_background, onLaterPages=_draw_report_background)
+        pdf_bytes = buffer.getvalue()
+        buffer.close()
+        
+        _report_cache = base64.b64encode(pdf_bytes).decode('utf-8')
+        _report_session_count = total_sessions
+        return _report_cache
+    except Exception as e:
+        import traceback
+        err_msg = traceback.format_exc()
+        return json.dumps({"error": str(err_msg)})
 
 if __name__ == "__main__":
     pass
