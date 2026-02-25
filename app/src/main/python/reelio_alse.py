@@ -1175,6 +1175,11 @@ def run_dashboard_payload(csv_data: str, state_path: str = None) -> str:
             # InteractionRate is already a derived per-reel ratio — mean across session
             interaction_rate = float(s_df['InteractionRate'].mean()) if 'InteractionRate' in s_df.columns else 0.0
             
+            # Get exact end time of the session for the live ticker
+            end_time_str = "Unknown"
+            if 'EndTime' in s_df.columns:
+                end_time_str = str(s_df['EndTime'].iloc[-1])
+            
             results.append({
                 "sessionNum":          str(sess_id),
                 "S_t":                 S_t_reported,
@@ -1183,6 +1188,7 @@ def run_dashboard_payload(csv_data: str, state_path: str = None) -> str:
                 "avgDwell":            avg_dwell,
                 "timePeriod":          str(time_period),
                 "date":                str(date_str),
+                "endTime":             end_time_str,
                 # Interaction data — previously missing from payload entirely
                 "totalLikes":          total_likes,
                 "totalComments":       total_comments,

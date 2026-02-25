@@ -623,14 +623,41 @@
       function HomeScreen(p) {
         var onNav = p.onNav, S = p.session, L = p.live, svc = p.isServiceActive;
 
-        var peakStr = "--";
-        if (window.circadian && window.circadian.length > 0) {
-          var maxD = -1, peakH = "0";
-          window.circadian.forEach(function (d) {
-            if (d.doom > maxD) { maxD = d.doom; peakH = d.h; }
-          });
-          var peakHNum = parseInt(peakH, 10);
-          peakStr = (peakHNum % 12 || 12) + (peakHNum >= 12 ? "PM" : "AM");
+        var timeSinceStr = "--:--:--";
+        var ts1 = useState(Date.now()), now = ts1[0], setNow = ts1[1];
+
+        useEffect(function () {
+          var interval = setInterval(function () {
+            setNow(Date.now());
+          }, 1000);
+          return function () { clearInterval(interval); };
+        }, []);
+
+        if (S && S.endTime) {
+          // Normalize Android "yyyy-MM-dd HH:mm:ss" to ISO "yyyy-MM-ddTHH:mm:ss" for WebView compat
+          var standardTimeStr = S.endTime.replace(" ", "T");
+          var lastTime = new Date(standardTimeStr).getTime();
+
+          if (isNaN(lastTime)) {
+            // Fallback to python injected date string if parsing fails
+            if (S.date) {
+              var dts = S.date.split("T");
+              if (dts.length > 1) lastTime = new Date(S.date).getTime();
+            }
+          }
+          if (!isNaN(lastTime)) {
+            var diffMs = now - lastTime;
+            if (diffMs > 0) {
+              var hrs = Math.floor(diffMs / (1000 * 60 * 60));
+              var mins = Math.floor((diffMs / (1000 * 60)) % 60);
+              var secs = Math.floor((diffMs / 1000) % 60);
+              timeSinceStr = (hrs > 0 ? hrs + ":" : "") +
+                mins.toString().padStart(2, '0') + ":" +
+                secs.toString().padStart(2, '0');
+            } else {
+              timeSinceStr = "ACTIVE";
+            }
+          }
         }
 
         return e("div", { className: "slide-up", style: { padding: "0 16px 24px", position: "relative", zIndex: 1 } },
@@ -716,7 +743,7 @@
               [{ label: "Session Duration", value: L.duration, big: true, col: "#fff" },
               { label: "Session Reels", value: L.reels, big: true, col: "#fff" },
               { label: "Avg Dwell Time", value: L.avg_dwell + "s", big: false, col: D.warn },
-              { label: "Peak Hour", value: peakStr, big: false, col: D.doomMag }
+              { label: "Time Since Last", value: timeSinceStr, big: false, col: D.safe }
               ].map(function (it, i) {
                 return e("div", { key: it.label, style: { padding: "14px 16px", borderRight: i % 2 === 0 ? "1px solid " + D.border : "none", borderBottom: i < 2 ? "1px solid " + D.border : "none" } },
                   e("div", { className: "spacemono", style: { fontSize: it.big ? 30 : 24, fontWeight: 700, color: it.col, lineHeight: 1, textShadow: it.col !== "#fff" ? "0 0 16px " + it.col + "88" : "none" } }, it.value),
@@ -1164,6 +1191,44 @@
           e("div", { style: { display: "flex", alignItems: "center", marginBottom: 20, padding: "14px 4px 0" } },
             e(Ico, { name: "Settings", size: 20, color: D.safe, style: { filter: "drop-shadow(0 0 6px " + D.safe + ")", marginRight: 10 } }),
             e("div", { style: { fontSize: 16, fontWeight: 700, color: "#fff", letterSpacing: "0.05em" } }, "SYSTEM PREFERENCES")
+          ),
+
+          /* ── Metrics Documentation (New) ── */
+          e("div", { className: "card", style: { padding: "16px", marginBottom: 16 } },
+            e("div", {
+              style: { display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }, onClick: function () {
+                var el = document.getElementById("metrics-doc-content-idx");
+                if (el) el.style.display = el.style.display === "none" ? "block" : "none";
+              }
+            },
+              e(Label, { style: { color: D.safe, fontSize: 13, fontWeight: 700 } }, "Know How Metrics are Calculated"),
+              e(Ico, { name: "ChevronDown", size: 16, color: D.safe })
+            ),
+            e("div", { id: "metrics-doc-content-idx", style: { display: "none", marginTop: 16, fontSize: 12, color: D.muted, lineHeight: 1.6 } },
+              e("div", { style: { marginBottom: 14 } },
+                e("strong", { style: { color: "#fff" } }, "Cumulative Exposure (14-Day Heatmap)"), e("br", null),
+                e("span", { style: { color: D.safe } }, "The Math: "), "Calculates the average Doom Score across all sessions on a given calendar day.", e("br", null),
+                e("span", { style: { color: D.safe } }, "The Value: "), "Reveals multi-day behavioral trends (e.g., higher exposure consistently on weekends)."
+              ),
+              e("div", { style: { marginBottom: 14 } },
+                e("strong", { style: { color: "#fff" } }, "Circadian Doom Profile (24-Hour Curve)"), e("br", null),
+                e("span", { style: { color: D.safe } }, "The Math: "), "Groups all historic sessions by their Start Time hour, averaging the Doom Probability for each specific hour of the day.", e("br", null),
+                e("span", { style: { color: D.safe } }, "The Value: "), "Maps your biological vulnerability. Shows what time of day you are most prone to mindless scrolling."
+              ),
+              e("div", { style: { marginBottom: 14 } },
+                e("strong", { style: { color: "#fff" } }, "Pull Index (Doom Inertia)"), e("br", null),
+                e("span", { style: { color: D.safe } }, "The Math: "), "A multiplier derived from the Markov Model. Doom Inertia (Staying hooked) ÷ Trap Rate (Getting hooked).", e("br", null),
+                e("span", { style: { color: D.safe } }, "The Value: "), "If 5.2x, you are mathematically 5.2 times more likely to stay scrolling once hooked than you were to initially start."
+              ),
+              e("div", { style: { marginBottom: 14 } },
+                e("strong", { style: { color: "#fff" } }, "Capture Rate (All-Time)"), e("br", null),
+                e("span", { style: { color: D.safe } }, "The Math: "), "Percentage of all historic reels where the AI calculated your Doom State probability at >50%."
+              ),
+              e("div", { style: { marginBottom: 14 } },
+                e("strong", { style: { color: "#fff" } }, "Doom Score & Top Drivers"), e("br", null),
+                e("span", { style: { color: D.safe } }, "The Math: "), "Evaluates 6 heuristic penalties per session: Length (25%), Automaticity (20%), Exit Conflict (20%), Environment & Sleep (10%), Rapid Re-entry (15%), and Rewatch Compulsion (10%)."
+              )
+            )
           ),
 
           e("div", { className: "card", style: { padding: "16px", marginBottom: 16 } },

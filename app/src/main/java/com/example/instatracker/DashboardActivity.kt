@@ -183,7 +183,14 @@ class DashboardActivity : ComponentActivity() {
                 return false
             }
 
-            android.util.Log.d("ReactDashboard", "Cache valid with circadian data")
+            // Migration FIX: Ensure cache contains new endTime metric for live ticker
+            if (!text.contains("\"endTime\"")) {
+                android.util.Log.d("ReactDashboard", "Cache missing endTime for Live Ticker, forcing recompute")
+                hmmFile.delete()
+                return false
+            }
+
+            android.util.Log.d("ReactDashboard", "Cache valid with circadian and ticker data")
             true
         } catch (e: Exception) {
             android.util.Log.e("ReactDashboard", "Cache read error: ${e.message}")

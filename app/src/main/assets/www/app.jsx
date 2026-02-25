@@ -859,6 +859,43 @@ const SettingsScreen = ({ onNav }) => {
                 <div style={{ fontSize: 16, fontWeight: 700, color: "#fff", letterSpacing: "0.05em" }}>SYSTEM PREFERENCES</div>
             </div>
 
+            {/* ── Metrics Documentation (New) ── */}
+            <div className="card" style={{ padding: "16px", marginBottom: 16 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }} onClick={() => {
+                    const el = document.getElementById("metrics-doc-content");
+                    if (el) el.style.display = el.style.display === "none" ? "block" : "none";
+                }}>
+                    <Label style={{ color: D.safe, fontSize: 13, fontWeight: 700 }}>Know How Metrics are Calculated</Label>
+                    <ChevronDown size={16} color={D.safe} />
+                </div>
+
+                <div id="metrics-doc-content" style={{ display: "none", marginTop: 16, fontSize: 12, color: D.muted, lineHeight: 1.6 }}>
+                    <div style={{ marginBottom: 14 }}>
+                        <strong style={{ color: "#fff" }}>Cumulative Exposure (14-Day Heatmap)</strong><br />
+                        <span style={{ color: D.safe }}>The Math:</span> Calculates the average Doom Score across all sessions on a given calendar day.<br />
+                        <span style={{ color: D.safe }}>The Value:</span> Reveals multi-day behavioral trends (e.g., higher exposure consistently on weekends).
+                    </div>
+                    <div style={{ marginBottom: 14 }}>
+                        <strong style={{ color: "#fff" }}>Circadian Doom Profile (24-Hour Curve)</strong><br />
+                        <span style={{ color: D.safe }}>The Math:</span> Groups all historic sessions by their Start Time hour, averaging the Doom Probability for each specific hour of the day.<br />
+                        <span style={{ color: D.safe }}>The Value:</span> Maps your biological vulnerability. Shows what time of day you are most prone to mindless scrolling.
+                    </div>
+                    <div style={{ marginBottom: 14 }}>
+                        <strong style={{ color: "#fff" }}>Pull Index (Doom Inertia)</strong><br />
+                        <span style={{ color: D.safe }}>The Math:</span> A multiplier derived from the Markov Model. `Doom Inertia (Staying hooked) ÷ Trap Rate (Getting hooked)`.<br />
+                        <span style={{ color: D.safe }}>The Value:</span> If 5.2x, you are mathematically 5.2 times more likely to stay scrolling once hooked than you were to initially start.
+                    </div>
+                    <div style={{ marginBottom: 14 }}>
+                        <strong style={{ color: "#fff" }}>Capture Rate (All-Time)</strong><br />
+                        <span style={{ color: D.safe }}>The Math:</span> Percentage of all historic reels where the AI calculated your Doom State probability at &gt;50%.
+                    </div>
+                    <div style={{ marginBottom: 14 }}>
+                        <strong style={{ color: "#fff" }}>Doom Score & Top Drivers</strong><br />
+                        <span style={{ color: D.safe }}>The Math:</span> Evaluates 6 heuristic penalties per session: Length (25%), Automaticity (20%), Exit Conflict (20%), Environment & Sleep (10%), Rapid Re-entry (15%), and Rewatch Compulsion (10%).
+                    </div>
+                </div>
+            </div>
+
             <div className="card" style={{ padding: "16px", marginBottom: 16 }}>
                 <Label style={{ display: "block", marginBottom: 16, color: D.safe }}>Micro-Probe Calibration</Label>
                 <div style={{ fontSize: 12, color: D.text, marginBottom: 16, lineHeight: 1.5 }}>
