@@ -819,7 +819,7 @@ const DashboardScreen = ({ SESSION, REELS_DATA, DAYS_14 }) => {
 };
 
 /* ─── SETTINGS SCREEN ───────────────────────────────────────────── */
-const SettingsScreen = ({ onNav }) => {
+const SettingsScreen = ({ onNav, rawData }) => {
     const [surveyProb, setSurveyProb] = useState(0.3);
     const [sleepStart, setSleepStart] = useState(23);
     const [sleepEnd, setSleepEnd] = useState(7);
@@ -848,6 +848,15 @@ const SettingsScreen = ({ onNav }) => {
         } else {
             setSleepEnd(v);
             window.Android?.setSleepSchedule(sleepStart, v);
+        }
+    };
+
+    const handleGenerateReport = () => {
+        try {
+            const payload = JSON.stringify(rawData || {});
+            window.Android?.generateIntelligenceReport(payload);
+        } catch (e) {
+            console.error("Failed to generate report payload", e);
         }
     };
 
@@ -951,6 +960,17 @@ const SettingsScreen = ({ onNav }) => {
             <div className="card card-danger" style={{ padding: "16px", marginBottom: 16 }}>
                 <Label style={{ display: "block", marginBottom: 16, color: D.doom }}>Data Management</Label>
                 <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                    <button
+                        className="btn-primary"
+                        onClick={handleGenerateReport}
+                        style={{
+                            display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+                            background: `linear-gradient(135deg, ${D.safe}, ${D.blue})`, color: "#001018", padding: "14px",
+                            fontWeight: 700
+                        }}
+                    >
+                        <Download size={15} /> Generate Intelligence Report (PDF)
+                    </button>
                     <button className="btn-primary" onClick={() => window.Android?.exportCsv()} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, background: `linear-gradient(135deg, ${D.muted}, #1a2436)`, color: "#fff", padding: "14px" }}>
                         <Download size={15} /> Export Behavioral Baseline
                     </button>
@@ -1020,33 +1040,50 @@ export default function ReeliApp() {
 
     if (!rawData) return null;
 
-    const mostRecentSession = rawData.sessions[rawData.sessions.length - 1];
-    const allSessionsSt = rawData.sessions.map(s => s.S_t);
-    const avgSt = allSessionsSt.reduce((a, b) => a + b, 0) / rawData.sessions.length;
-    const A = rawData.model_parameters.transition_matrix || [[0.8, 0.2], [0.2, 0.8]];
+    const clamp01 = (v, fallback = 0) => {
+        const n = Number(v);
+        if (!Number.isFinite(n)) return fallback;
+        return Math.max(0, Math.min(1, n));
+    };
+    const toNum = (v, fallback = 0) => {
+        const n = Number(v);
+        return Number.isFinite(n) ? n : fallback;
+    };
+
+    const mostRecentSession = rawData.sessions[rawData.sessions.length - 1] || {};
+    const allSessionsSt = rawData.sessions.map(s => clamp01(s.S_t));
+    const avgSt = allSessionsSt.length
+        ? allSessionsSt.reduce((a, b) => a + b, 0) / allSessionsSt.length
+        : 0;
+    const A = rawData.model_parameters?.transition_matrix || [[0.8, 0.2], [0.2, 0.8]];
+    const totalReels = rawData.sessions.reduce((acc, s) => acc + toNum(s.nReels, 0), 0);
+    const totalDwellSeconds = rawData.sessions.reduce((acc, s) => acc + (toNum(s.avgDwell, 0) * toNum(s.nReels, 0)), 0);
+    const totalInteractions = rawData.sessions.reduce((acc, s) => acc + toNum(s.totalInteractions, 0), 0);
 
     const derivedSession = {
         ...mostRecentSession,
         doom_label: mostRecentSession.S_t > 0.6 ? "DOOM" : mostRecentSession.S_t > 0.35 ? "BORDERLINE" : "CASUAL",
-        doom_score: mostRecentSession.S_t,
-        model_confidence: Math.min(1.0, rawData.sessions.length / 20),
-        doom_pull_index: ((A[0][1] / Math.max(0.01, A[1][0])) * 1.5).toFixed(1),
-        regime_stability: 1.0 / (1.0 - A[1][1] + 0.001),
-        regime_alert: mostRecentSession.S_t > (avgSt + 0.2),
+        doom_score: clamp01(mostRecentSession.S_t),
+        model_confidence: clamp01(rawData.model_confidence, Math.min(1.0, rawData.sessions.length / 20)),
+        doom_pull_index: (toNum(A[0]?.[1], 0.2) / Math.max(0.01, toNum(A[1]?.[0], 0.2))).toFixed(1),
+        regime_stability: toNum(rawData.model_parameters?.regime_stability_score, 1.0 / (1.0 - toNum(A[1]?.[1], 0.8) + 0.001)),
+        regime_alert: clamp01(mostRecentSession.S_t) > (avgSt + 0.2),
         sessions_today: rawData.sessions.length,
         total_doom_sessions: rawData.sessions.filter(s => s.S_t > 0.65).length,
-        total_interactions: rawData.sessions.reduce((acc, s) => acc + (s.likes || 0) + (s.comments || 0) + (s.shares || 0) + (s.saves || 0), 0),
-        total_dwell_today_min: (rawData.sessions.length * 5),
+        total_interactions: totalInteractions,
+        total_dwell_today_min: totalDwellSeconds / 60,
         A: A,
-        q_01: 0.31, q_10: 0.13, h: [0.156, 0.037],
+        q_01: toNum(A[0]?.[1], 0.2),
+        q_10: toNum(A[1]?.[0], 0.2),
+        h: [Math.max(0.001, 1 - toNum(A[0]?.[0], 0.8)), Math.max(0.001, 1 - toNum(A[1]?.[1], 0.8))],
         doom_components: {
-            length: Math.random() * 0.5 + 0.4,
-            volitional_conflict: Math.random() * 0.5 + 0.4,
-            rapid_reentry: Math.random() * 0.5 + 0.4,
-            automaticity: Math.random() * 0.5 + 0.4,
-            dwell_collapse: Math.random() * 0.5 + 0.4,
-            rewatch: Math.random() * 0.5 + 0.4,
-            environment: Math.random() * 0.5 + 0.4,
+            length: clamp01(totalReels / 120, 0.2),
+            volitional_conflict: clamp01(1 - toNum(mostRecentSession.interactionRate, 0), 0.5),
+            rapid_reentry: clamp01(toNum(A[0]?.[1], 0.2), 0.2),
+            automaticity: clamp01(toNum(mostRecentSession.S_t, avgSt), avgSt),
+            dwell_collapse: clamp01(toNum(mostRecentSession.avgDwell, 0) / 12, 0.4),
+            rewatch: clamp01(toNum(mostRecentSession.interactionRate, 0) * 0.6 + toNum(mostRecentSession.S_t, 0) * 0.4, 0.3),
+            environment: clamp01(rawData.circadian?.reduce((m, c) => Math.max(m, toNum(c.doom, 0)), 0), 0.5),
         },
     };
 
@@ -1056,18 +1093,37 @@ export default function ReeliApp() {
         avg_dwell: 3.5,
     };
 
-    const timelineData = (rawData.timeline?.p_capture || []).map((p, i) => ({
+    const captureTimeline = (rawData.timeline?.p_capture || []).map((p) => clamp01(p));
+    const timelineData = captureTimeline.map((p, i) => ({
         r: i + 1, p,
-        exit: Math.random() > 0.95,
-        back: Math.random() > 0.95,
+        exit: i > 0 && (captureTimeline[i - 1] - p) > 0.35,
+        back: i > 0 && (p - captureTimeline[i - 1]) > 0.35,
     }));
 
-    const mockDays = Array.from({ length: 14 }, (_, i) => ({
-        d: ["M", "T", "W", "T", "F", "S", "S"][i % 7],
-        n: i + 8,
-        v: parseFloat((avgSt * 0.7 + Math.random() * 0.3).toFixed(2)),
-        s: Math.floor(2 + Math.random() * 5),
-    }));
+    const dayMap = new Map();
+    rawData.sessions.forEach((s) => {
+        const key = s.date || "Unknown";
+        const current = dayMap.get(key) || { sum: 0, count: 0, sessions: 0 };
+        current.sum += clamp01(s.S_t);
+        current.count += 1;
+        current.sessions += 1;
+        dayMap.set(key, current);
+    });
+    const mockDaysRaw = Array.from(dayMap.entries())
+        .slice(-14)
+        .map(([date, v]) => {
+            const [month = "", day = ""] = String(date).split("-");
+            return {
+                d: month,
+                n: day,
+                v: parseFloat((v.sum / Math.max(1, v.count)).toFixed(2)),
+                s: v.sessions,
+            };
+        });
+    const mockDays = [
+        ...Array.from({ length: Math.max(0, 14 - mockDaysRaw.length) }, () => ({ d: "--", n: "--", v: 0, s: 0 })),
+        ...mockDaysRaw,
+    ];
 
     return (
         <div style={{ display: "flex", justifyContent: "center", minHeight: "100vh", background: "#000", alignItems: "flex-start" }}>
@@ -1102,7 +1158,7 @@ export default function ReeliApp() {
                 <div style={{ overflowY: "auto", height: "calc(100vh - 44px - 56px)" }}>
                     {screen === "home" ? <HomeScreen onNav={setScreen} SESSION={derivedSession} LIVE={derivedLive} isServiceActive={isServiceActive} />
                         : screen === "dashboard" ? <DashboardScreen SESSION={derivedSession} REELS_DATA={timelineData} DAYS_14={mockDays} />
-                            : <SettingsScreen onNav={setScreen} />}
+                            : <SettingsScreen onNav={setScreen} rawData={rawData} />}
                 </div>
 
                 {/* Tab bar */}
