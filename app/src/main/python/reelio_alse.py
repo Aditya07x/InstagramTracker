@@ -1177,8 +1177,16 @@ def run_dashboard_payload(csv_data: str, state_path: str = None) -> str:
             
             # Get exact end time of the session for the live ticker
             end_time_str = "Unknown"
-            if 'EndTime' in s_df.columns:
-                end_time_str = str(s_df['EndTime'].iloc[-1])
+            if 'EndTime' in s_df.columns and 'StartTime' in s_df.columns:
+                try:
+                    s_dt = pd.to_datetime(s_df['StartTime'].iloc[-1])
+                    end_time_only = str(s_df['EndTime'].iloc[-1]).strip()
+                    e_dt = pd.to_datetime(f"{s_dt.strftime('%Y-%m-%d')} {end_time_only}")
+                    if e_dt < s_dt:
+                        e_dt += pd.Timedelta(days=1)
+                    end_time_str = e_dt.strftime('%Y-%m-%dT%H:%M:%S')
+                except Exception:
+                    end_time_str = str(s_df['EndTime'].iloc[-1])
             
             results.append({
                 "sessionNum":          str(sess_id),
