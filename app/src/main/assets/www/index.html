@@ -413,12 +413,33 @@
         bg: "#05050A", doom: "#FF2D55", doomMag: "#f20da6",
         safe: "#0ddff2", warn: "#FFB340", violet: "#BF5AF2", blue: "#0A84FF",
         text: "#D0DCF0", muted: "#8899AA",
-        border: "rgba(13,223,242,0.12)",
-        borderDoom: "rgba(242,13,166,0.35)",
-        borderDanger: "rgba(255,45,85,0.35)"
+        border: "rgba(13, 223, 242, 0.12)",
+        borderDoom: "rgba(242, 13, 166, 0.35)",
+        borderDanger: "rgba(255, 45, 85, 0.35)"
       };
 
-      var THRESHOLDS = { doom: 0.65, moderate: 0.35 };
+      class AppErrorBoundary extends React.Component {
+        constructor(props) { super(props); this.state = { error: null }; }
+        componentDidCatch(err) { this.setState({ error: err.toString() + "\n" + err.stack }); }
+        render() {
+          if (this.state.error) {
+            return React.createElement("pre", {
+              style: { color: "#FF2D55", padding: 16, fontSize: 10, background: "#05050A", minHeight: "100vh", whiteSpace: "pre-wrap", wordBreak: "break-all", fontFamily: "monospace" }
+            }, "CRASH:\n" + this.state.error);
+          }
+          return this.props.children;
+        }
+      }
+
+      var THRESHOLDS = { doom: 0.55, moderate: 0.35 };
+
+      // === MODEL THRESHOLDS (CANONICAL SOURCE) ===
+      var MODEL_THRESHOLDS = {
+        doomLabel: 0.55,
+        moderateLabel: 0.35,
+        circadianHigh: 0.65,
+        dominanceThreshold: 0.5
+      };
 
       function riskLabel(st) {
         return st > THRESHOLDS.doom ? "DOOM"
@@ -486,6 +507,243 @@
 
       function Divider() { return e("div", { style: { height: 1, background: D.border, margin: "0 -1px" } }); }
 
+      /* ── Redesigned Chart Helpers & Components ── */
+      function rollingAvg(data, window) {
+        return data.map(function (_, i) {
+          var start = Math.max(0, i - (window || 20));
+          var slice = data.slice(start, i + 1);
+          return slice.reduce(function (a, b) { return a + b; }, 0) / slice.length;
+        });
+      }
+
+      function lerpColor(a, b, t) {
+        var ah = a.replace("#", ""), bh = b.replace("#", "");
+        var ar = parseInt(ah.slice(0, 2), 16), ag = parseInt(ah.slice(2, 4), 16), ab = parseInt(ah.slice(4, 6), 16);
+        var br = parseInt(bh.slice(0, 2), 16), bg = parseInt(bh.slice(2, 4), 16), bb = parseInt(bh.slice(4, 6), 16);
+        var r = Math.round(ar + (br - ar) * t);
+        var g = Math.round(ag + (bg - ag) * t);
+        var b = Math.round(ab + (bb - ab) * t);
+        return "rgb(" + r + "," + g + "," + b + ")";
+      }
+
+      function riskColorGradient(v) {
+        if (v < MODEL_THRESHOLDS.moderateLabel) return lerpColor(D.safe, D.safe, 0);
+        if (v < MODEL_THRESHOLDS.circadianHigh) return lerpColor(D.safe, D.warn, (v - MODEL_THRESHOLDS.moderateLabel) / 0.3);
+        return lerpColor(D.warn, D.doomMag, (v - MODEL_THRESHOLDS.circadianHigh) / 0.35);
+      }
+
+      /* ── Advanced color scoring ── */
+      function advRiskColor(v, alpha) {
+        if (alpha === undefined) alpha = 1;
+        var r, g, b;
+        if (v <= 0.35) {
+          var t = v / 0.35;
+          r = Math.round(13 + (255 - 13) * t * 0.7); g = Math.round(223 - (223 - 179) * t); b = Math.round(242 - (242 - 64) * t);
+        } else if (v <= 0.65) {
+          var t = (v - 0.35) / 0.30;
+          r = Math.round(13 + (242 - 13) * t); g = Math.round(223 - 223 * t); b = Math.round(242 - 242 * t);
+        } else {
+          var t = (v - 0.65) / 0.35;
+          r = 242; g = 0; b = Math.round(166 * t);
+        }
+        return "rgba(" + r + "," + g + "," + b + "," + alpha + ")";
+      }
+      function advRiskColorHex(v) {
+        if (v <= 0.35) return "#0ddff2";
+        if (v <= 0.65) {
+          var t = (v - 0.35) / 0.30;
+          var r = Math.round(13 + (242 - 13) * t).toString(16).padStart(2, "0");
+          var g = Math.round(223 - 223 * t).toString(16).padStart(2, "0");
+          return "#" + r + g + "00";
+        }
+        var t = (v - 0.65) / 0.35;
+        var b = Math.round(166 * t).toString(16).padStart(2, "0");
+        return "#f200" + b;
+      }
+      function getAlphaColor(rgba, a) { return rgba.replace(/[\d\.]+\)$/g, a + ")"); }
+
+      function solveSmooth(data, window) {
+        if (window <= 1) return data;
+        var out = [];
+        for (var i = 0; i < data.length; i++) {
+          var sum = 0, count = 0;
+          for (var j = Math.max(0, i - window); j <= Math.min(data.length - 1, i + window); j++) {
+            sum += data[j];
+            count++;
+          }
+          out.push(sum / count);
+        }
+        return out;
+      }
+
+      function RiskBar(p) {
+        var v = p.v;
+        return e("div", { style: { height: 3, borderRadius: 2, background: "rgba(255,255,255,0.05)", position: "relative", flex: 1 } },
+          e("div", { style: { position: "absolute", left: 0, top: 0, bottom: 0, width: (v * 100) + "%", background: advRiskColorHex(v), borderRadius: 2, boxShadow: "0 0 8px " + advRiskColor(v, 0.4) } })
+        );
+      }
+
+      function HeatDens(p) {
+        var data = p.data, height = p.height || 4;
+        var canvasRef = React.useRef(null);
+        React.useEffect(function () {
+          var c = canvasRef.current;
+          if (!c) return;
+          var ctx = c.getContext("2d");
+          c.width = data.length; c.height = height;
+          data.forEach(function (v, i) {
+            ctx.fillStyle = advRiskColor(v, 0.8);
+            ctx.fillRect(i, 0, 1, height);
+          });
+        }, [data]);
+        return e("canvas", { ref: canvasRef, style: { width: "100%", height: height, display: "block", borderRadius: 2, imageRendering: "pixelated" } });
+      }
+
+      function SessionTopologyCanvas(p) {
+        var data = p.data || [], height = p.height || 160;
+        var cursor = p.cursor, setCursor = p.setCursor;
+        var canvasRef = React.useRef(null);
+        var [smoothWin, setSmoothWin] = React.useState(5);
+
+        var raw = data.map(function (d) { return d.p || 0; });
+        var smoothed = solveSmooth(raw, smoothWin);
+
+        var momentum = "Stable";
+        if (smoothed.length >= 5) {
+          var recent = smoothed.slice(-5);
+          var slope = (recent[4] - recent[0]) / 4;
+          if (slope > 0.02) momentum = "Rising";
+          else if (slope < -0.02) momentum = "Falling";
+        }
+
+        React.useEffect(function () {
+          var c = canvasRef.current; if (!c) return;
+          var ctx = c.getContext("2d");
+          var W = c.clientWidth, H = c.clientHeight;
+          c.width = W * 2; c.height = H * 2;
+          ctx.scale(2, 2);
+          ctx.clearRect(0, 0, W, H);
+
+          var PAD = { t: 15, r: 10, b: 20, l: 30 };
+          var gW = W - PAD.l - PAD.r, gH = H - PAD.t - PAD.b;
+
+          // Grid
+          ctx.strokeStyle = "rgba(13,223,242,0.04)"; ctx.lineWidth = 1;
+          for (var i = 0; i <= 4; i++) {
+            var y = PAD.t + (i / 4) * gH;
+            ctx.beginPath(); ctx.moveTo(PAD.l, y); ctx.lineTo(PAD.l + gW, y); ctx.stroke();
+          }
+
+          // Area & Line
+          if (smoothed.length > 1) {
+            var getX = function (i) { return PAD.l + (i / (smoothed.length - 1)) * gW; };
+            var getY = function (v) { return PAD.t + gH - v * gH; };
+
+            // Gradient Area
+            var grad = ctx.createLinearGradient(0, PAD.t, 0, PAD.t + gH);
+            grad.addColorStop(0, advRiskColor(0.8, 0.15));
+            grad.addColorStop(1, advRiskColor(0.1, 0.02));
+            ctx.fillStyle = grad;
+            ctx.beginPath(); ctx.moveTo(getX(0), PAD.t + gH);
+            smoothed.forEach(function (v, i) { ctx.lineTo(getX(i), getY(v)); });
+            ctx.lineTo(getX(smoothed.length - 1), PAD.t + gH); ctx.fill();
+
+            // Main Line
+            ctx.lineWidth = 2.5; ctx.lineCap = "round"; ctx.lineJoin = "round";
+            smoothed.forEach(function (v, i) {
+              if (i === 0) return;
+              ctx.beginPath(); ctx.strokeStyle = advRiskColor(v, 0.85);
+              ctx.moveTo(getX(i - 1), getY(smoothed[i - 1]));
+              ctx.lineTo(getX(i), getY(v)); ctx.stroke();
+            });
+
+            // Cursor
+            var cx = getX(cursor), cy = getY(smoothed[cursor]);
+            ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.5;
+            ctx.beginPath(); ctx.moveTo(cx, PAD.t); ctx.lineTo(cx, PAD.t + gH); ctx.stroke();
+            ctx.fillStyle = advRiskColor(smoothed[cursor], 1);
+            ctx.shadowBlur = 10; ctx.shadowColor = advRiskColor(smoothed[cursor], 0.6);
+            ctx.beginPath(); ctx.arc(cx, cy, 5, 0, Math.PI * 2); ctx.fill();
+            ctx.shadowBlur = 0;
+            ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.stroke();
+          }
+        }, [smoothed, cursor, smoothWin]);
+
+        var handleMove = function (e) {
+          var c = canvasRef.current; if (!c) return;
+          var rect = c.getBoundingClientRect();
+          var x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
+          var PAD_L = 30; var gW = rect.width - PAD_L - 10;
+          var frac = Math.max(0, Math.min(1, (x - PAD_L) / gW));
+          setCursor(Math.round(frac * (data.length - 1)));
+        };
+
+        var low = smoothed.filter(function (v) { return v < MODEL_THRESHOLDS.moderateLabel; }).length;
+        var mid = smoothed.filter(function (v) { return v >= MODEL_THRESHOLDS.moderateLabel && v < MODEL_THRESHOLDS.circadianHigh; }).length;
+        var hi = smoothed.length - low - mid;
+        var pct = function (v) { return Math.round((v / smoothed.length) * 100); };
+
+        return e("div", { className: "card", style: { padding: 16, background: "rgba(10,17,20,0.9)", border: "1px solid " + D.border, borderRadius: 16 } },
+          e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 } },
+            e("div", null,
+              e(Label, { style: { fontSize: 9, display: "block" } }, "Session Topology"),
+              e("div", { style: { display: "flex", alignItems: "center", gap: 6, marginTop: 2 } },
+                e("div", { className: "mono", style: { fontSize: 9, color: D.muted } }, "Per-Reel Capture Dynamics · " + data.length + " reels"),
+                e("div", {
+                  className: "mono", style: {
+                    fontSize: 8, padding: "1px 6px", borderRadius: 4,
+                    background: momentum === "Rising" ? D.doom + "18" : momentum === "Falling" ? D.safe + "18" : D.muted + "18",
+                    color: momentum === "Rising" ? D.doom : momentum === "Falling" ? D.safe : D.muted,
+                    border: "1px solid " + (momentum === "Rising" ? D.doom + "33" : momentum === "Falling" ? D.safe + "33" : D.muted + "33")
+                  }
+                }, momentum === "Rising" ? "▲ Rising" : momentum === "Falling" ? "▼ Falling" : "● Stable")
+              )
+            ),
+            e("div", { className: "mono", style: { textAlign: "right" } },
+              e("div", { style: { fontSize: 16, fontWeight: 700, color: advRiskColorHex(smoothed[cursor]) } }, Math.round(smoothed[cursor] * 100) + "%"),
+              e("div", { style: { fontSize: 8, color: D.muted } }, "REEL #" + (cursor + 1))
+            )
+          ),
+          e("div", { style: { position: "relative", height: height } },
+            e("canvas", {
+              ref: canvasRef, onMouseMove: handleMove, onTouchMove: handleMove,
+              style: { width: "100%", height: "100%", cursor: "crosshair", display: "block" }
+            })
+          ),
+          e("div", { style: { display: "flex", gap: 10, marginTop: 12, alignItems: "center" } },
+            e(Label, { style: { fontSize: 8 } }, "Smoothing"),
+            e("input", {
+              type: "range", min: 1, max: 15, value: smoothWin,
+              onChange: function (ev) { setSmoothWin(+ev.target.value); },
+              style: { flex: 1, height: 2 }
+            })
+          ),
+          e("div", { style: { marginTop: 16 } },
+            e(HeatDens, { data: raw }),
+            e("div", { style: { display: "flex", justifyContent: "space-between", marginTop: 4, opacity: 0.6 } },
+              e(Label, { style: { fontSize: 7 } }, "START"), e(Label, { style: { fontSize: 7 } }, "END")
+            )
+          ),
+          e("div", { style: { display: "flex", gap: 8, marginTop: 12 } },
+            [
+              { l: "SAFE", p: pct(low), c: D.safe },
+              { l: "BORDER", p: pct(mid), c: D.warn },
+              { l: "DOOM", p: pct(hi), c: D.doomMag }
+            ].map(function (it, i) {
+              return e("div", { key: i, style: { flex: 1 } },
+                e("div", { style: { display: "flex", justifyContent: "space-between", marginBottom: 3 } },
+                  e(Label, { style: { fontSize: 7 } }, it.l),
+                  e("span", { className: "mono", style: { fontSize: 8, color: it.c } }, it.p + "%")
+                ),
+                e("div", { style: { height: 2, background: "rgba(255,255,255,0.05)", borderRadius: 1 } },
+                  e("div", { style: { height: "100%", width: it.p + "%", background: it.c, borderRadius: 1 } })
+                )
+              );
+            })
+          )
+        );
+      }
+
       /* ── Doom Gauge (SVG semicircle arc) ── */
       function DoomGauge(p) {
         var pct = Math.round((p.value || 0) * 100);
@@ -516,48 +774,6 @@
       }
 
       /* ── Simple SVG area chart (no Recharts needed) ── */
-      function AreaChartSVG(p) {
-        var data = p.data || [], height = p.height || 100;
-        if (!data.length) return e("div", { style: { height: height, display: "flex", alignItems: "center", justifyContent: "center" } }, e(Label, null, "No data"));
-        var vals = data.map(function (d) { return d.p || 0; });
-        var maxV = Math.max.apply(null, vals) || 1;
-        var pad = { t: 8, r: 4, b: 20, l: 32 }, W = 340 - pad.l - pad.r, H = height - pad.t - pad.b;
-        var pts = vals.map(function (v, i) { return [pad.l + (i / Math.max(vals.length - 1, 1)) * W, pad.t + H - (v / maxV) * H]; });
-
-        var lp = "M" + pts[0][0].toFixed(1) + " " + pts[0][1].toFixed(1);
-        for (var i = 1; i < pts.length; i++) {
-          var x0 = pts[i - 1][0], y0 = pts[i - 1][1];
-          var x1 = pts[i][0], y1 = pts[i][1];
-          var cx = (x0 + x1) / 2;
-          lp += " C" + cx.toFixed(1) + " " + y0.toFixed(1) + "," + cx.toFixed(1) + " " + y1.toFixed(1) + "," + x1.toFixed(1) + " " + y1.toFixed(1);
-        }
-        var ap = lp + " L" + pts[pts.length - 1][0].toFixed(1) + " " + (pad.t + H) + " L" + pad.l + " " + (pad.t + H) + " Z";
-        var cx = pad.l + (p.cursor / Math.max(vals.length - 1, 1)) * W;
-        return e("svg", { viewBox: "0 0 340 " + height, width: "100%", style: { overflow: "visible" } },
-          e("defs", null,
-            e("linearGradient", { id: "cg2", x1: "0", y1: "0", x2: "0", y2: "1" },
-              e("stop", { offset: "5%", stopColor: D.doomMag, stopOpacity: .45 }),
-              e("stop", { offset: "95%", stopColor: D.doomMag, stopOpacity: .02 }))),
-          e("line", { x1: pad.l, y1: pad.t + H * .5, x2: pad.l + W, y2: pad.t + H * .5, stroke: D.doomMag, strokeDasharray: "4 3", strokeOpacity: .4, strokeWidth: 1 }),
-          e("path", { d: ap, fill: "url(#cg2)" }),
-          e("path", { d: lp, fill: "none", stroke: D.doomMag, strokeWidth: 2, style: { filter: "drop-shadow(0 0 3px " + D.doomMag + ")" } }),
-          e("line", { x1: cx, y1: pad.t, x2: cx, y2: pad.t + H, stroke: D.safe, strokeDasharray: "3 2", strokeOpacity: .6, strokeWidth: 1 }),
-          [0, .5, 1].map(function (v, i) {
-            var y = pad.t + H - v * H;
-            return e("text", { key: i, x: pad.l - 2, y: y + 3, textAnchor: "end", fontFamily: "monospace", fontSize: 7, fill: D.muted }, Math.round(v * 100) + "%");
-          }),
-          e("text", { x: -(pad.t + H / 2), y: 10, transform: "rotate(-90)", textAnchor: "middle", fontFamily: "monospace", fontSize: 8, fill: D.muted, letterSpacing: "0.1em" }, "CAPTURE SCORE"),
-          (function () {
-            var labelStep = Math.max(1, Math.ceil(vals.length / 8));
-            return vals.map(function (v, i) {
-              if (i === 0 || i === vals.length - 1 || i % labelStep === 0) {
-                var x = pad.l + (i / Math.max(vals.length - 1, 1)) * W;
-                return e("text", { key: i, x: x, y: pad.t + H + 12, textAnchor: "middle", fontFamily: "monospace", fontSize: 7, fill: D.muted }, i + 1);
-              } return null;
-            });
-          })()
-        );
-      }
 
       /* ── Simple SVG area chart (Circadian 24hr) ── */
       function CircadianAreaChartSVG(p) {
@@ -574,14 +790,17 @@
         var lp = pts.map(function (pt, i) { return (i === 0 ? "M" : "L") + pt[0].toFixed(1) + " " + pt[1].toFixed(1); }).join(" ");
         var ap = lp + " L" + pts[pts.length - 1][0].toFixed(1) + " " + (pad.t + H) + " L" + pad.l + " " + (pad.t + H) + " Z";
 
-        // Threshold line at Doom > 0.65
-        var thresholdY = pad.t + H - (0.65 * H);
+        // Threshold line at Doom > circadianHigh
+        var thresholdY = pad.t + H - (MODEL_THRESHOLDS.circadianHigh * H);
+
+        // Opacity scaling per data point
+        var maxDoom = data.reduce(function (m, d) { return Math.max(m, d.doom || 0); }, 0);
 
         return e("svg", { viewBox: "0 0 340 " + height, width: "100%", style: { overflow: "visible" } },
           e("defs", null,
             e("linearGradient", { id: "circGrad", x1: "0", y1: "0", x2: "0", y2: "1" },
-              e("stop", { offset: "5%", stopColor: "#A855F7", stopOpacity: 0.4 }),
-              e("stop", { offset: "95%", stopColor: "#A855F7", stopOpacity: 0 })
+              e("stop", { offset: "5%", stopColor: D.doomMag, stopOpacity: 0.4 }),
+              e("stop", { offset: "95%", stopColor: D.safe, stopOpacity: 0 })
             )
           ),
 
@@ -590,19 +809,20 @@
 
           /* Area & Line */
           e("path", { d: ap, fill: "url(#circGrad)" }),
-          e("path", { d: lp, fill: "none", stroke: "#A855F7", strokeWidth: 2 }),
+          e("path", { d: lp, fill: "none", stroke: "url(#circGrad)", strokeWidth: 2 }),
 
           /* Cursor Line & Dot */
           cursor !== undefined && pts[cursor] && e("g", null,
             e("line", { x1: pts[cursor][0], y1: pad.t, x2: pts[cursor][0], y2: pad.t + H, stroke: "rgba(255,255,255,0.4)", strokeDasharray: "2 2", strokeWidth: 1 }),
-            e("circle", { cx: pts[cursor][0], cy: pts[cursor][1], r: 4, fill: "#fff", stroke: "#A855F7", strokeWidth: 2 })
+            e("circle", { cx: pts[cursor][0], cy: pts[cursor][1], r: 4, fill: "#fff", stroke: D.doomMag, strokeWidth: 2 })
           ),
 
           /* High-Risk Dots */
           data.map(function (d, i) {
-            if (d.doom < 0.65) return null;
+            if (d.doom < MODEL_THRESHOLDS.circadianHigh) return null;
             var pt = pts[i];
-            return e("circle", { key: "dot-" + i, cx: pt[0], cy: pt[1], r: 3, fill: "#EC4899", stroke: "none", style: { filter: "drop-shadow(0 0 4px #EC4899)" } });
+            var dotOpacity = maxDoom > 0 ? 0.3 + 0.7 * ((d.doom || 0) / maxDoom) : 1;
+            return e("circle", { key: "dot-" + i, cx: pt[0], cy: pt[1], r: 3, fill: D.doomMag, stroke: "none", style: { opacity: dotOpacity, filter: "drop-shadow(0 0 4px " + D.doomMag + ")" } });
           }),
 
           /* X-Axis Labels (time) */
@@ -720,8 +940,8 @@
           e("div", { className: "card " + (S.doom_label === "DOOM" ? "card-danger" : ""), style: { marginBottom: 12, overflow: "hidden" } },
             e("div", { style: { padding: "12px 16px", background: S.doom_label === "DOOM" ? "linear-gradient(90deg," + D.doom + "18,transparent)" : "linear-gradient(90deg," + D.safe + "10,transparent)", borderBottom: "1px solid " + (S.doom_label === "DOOM" ? D.borderDanger : D.border), display: "flex", justifyContent: "space-between", alignItems: "center" } },
               e("div", null,
-                e(Label, { style: { color: D.doom } }, "Cumulative Habit Load (All-Time)"),
-                e("div", { className: "mono", style: { fontSize: 9, color: D.muted, marginTop: 2 } }, "Global Intervention Priority")
+                e(Label, { style: { color: D.doom } }, "Capture Risk Score"),
+                e("div", { className: "mono", style: { fontSize: 9, color: D.muted, marginTop: 2 } }, "10-Session Average · How often the algorithm captured you")
               ),
               e(Ico, { name: "AlertTriangle", size: 18, color: D.doom, style: { filter: "drop-shadow(0 0 6px " + D.doom + ")" } })
             ),
@@ -729,7 +949,7 @@
               e(DoomGauge, { value: S.intervention_score, label: riskText(S.intervention_score) })
             ),
             e("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", borderTop: "1px solid " + D.border } },
-              [{ label: "Total Sessions", value: S.sessions_today }, { label: "Doom Sessions", value: S.total_doom_sessions }, { label: "Interactions · Today", value: S.total_interactions }].map(function (it, i) {
+              [{ label: "Sessions Today", value: S.sessions_today }, { label: "Active Time Today", value: S.active_time_today }, { label: "Interactions", value: S.total_interactions_today }].map(function (it, i) {
                 return e("div", { key: it.label, style: { padding: "12px 10px", textAlign: "center", borderRight: i < 2 ? "1px solid " + D.border : "none" } },
                   e(Label, { style: { fontSize: 9, display: "block", marginBottom: 4 } }, it.label),
                   e("div", { className: "spacemono", style: { fontSize: 18, fontWeight: 700, color: "#fff" } }, it.value)
@@ -739,17 +959,17 @@
           ),
 
           /* Stats summary card (Last 10) */
-          e("div", { style: { marginBottom: 6 } }, e(Label, { style: { paddingLeft: 2 } }, "Recent Summary (Last 10 Sessions)")),
+          e("div", { style: { marginBottom: 6 } }, e(Label, { style: { paddingLeft: 2 } }, "10-Session Averages")),
           e("div", { className: "card " + (S.doom_label === "DOOM" ? "card-doom" : ""), style: { padding: 0, marginBottom: 12, overflow: "hidden" } },
             e("div", { style: { padding: "10px 16px", background: S.doom_label === "DOOM" ? "linear-gradient(90deg," + D.doomMag + "18,transparent)" : "linear-gradient(90deg," + D.safe + "10,transparent)", borderBottom: "1px solid " + (S.doom_label === "DOOM" ? D.borderDoom : D.border), display: "flex", justifyContent: "space-between", alignItems: "center" } },
               e(Label, null, "LATEST TRENDS"),
               e(Tag, { label: S.doom_label })
             ),
             e("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr" } },
-              [{ label: "Session Duration", value: L.duration, big: true, col: "#fff" },
-              { label: "Session Reels", value: L.reels, big: true, col: "#fff" },
+              [{ label: "Avg Duration", value: L.duration, big: true, col: "#fff" },
+              { label: "Avg Reels", value: L.reels, big: true, col: "#fff" },
               { label: "Avg Dwell Time", value: L.avg_dwell + "s", big: false, col: D.warn },
-              { label: "Time Since Last", value: timeSinceStr, big: false, col: D.safe }
+              { label: "Since Last Session", value: timeSinceStr, big: false, col: D.safe }
               ].map(function (it, i) {
                 return e("div", { key: it.label, style: { padding: "14px 16px", borderRight: i % 2 === 0 ? "1px solid " + D.border : "none", borderBottom: i < 2 ? "1px solid " + D.border : "none" } },
                   e("div", { className: "spacemono", style: { fontSize: it.big ? 30 : 24, fontWeight: 700, color: it.col, lineHeight: 1, textShadow: it.col !== "#fff" ? "0 0 16px " + it.col + "88" : "none" } }, it.value),
@@ -763,10 +983,11 @@
           e("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 24 } },
             [{ label: "Pull Index", value: S.doom_pull_index + "x", col: D.warn },
             { label: "Total Reels", value: p.totalReelsAll || 0, col: D.warn },
-            { label: "Confidence", value: Math.round(S.model_confidence * 100) + "%", col: D.safe }
+            { label: "Doom Rate", value: S.doom_dominance, col: D.doom }
             ].map(function (it) {
               return e("div", { key: it.label, className: "card", style: { padding: "12px 10px", textAlign: "center" } },
                 e("div", { className: "spacemono", style: { fontSize: 20, fontWeight: 700, color: it.col, textShadow: "0 0 12px " + it.col + "88" } }, it.value),
+                it.label === "Pull Index" && e("div", { className: "mono", style: { fontSize: 7, color: D.muted, marginTop: 2, lineHeight: 1.4, textAlign: "center" } }, "harder to escape\nthan enter"),
                 e(Label, { style: { marginTop: 3, display: "block", fontSize: 9 } }, it.label),
                 e("div", { style: { height: 2, width: 28, background: it.col + "55", borderRadius: 1, margin: "6px auto 0" } })
               );
@@ -776,16 +997,6 @@
           e("button", { className: "btn-primary", onClick: function () { onNav("dashboard"); } },
             "View Behavioral Dashboard ",
             e(Ico, { name: "ChevronRight", size: 18, color: "#020A0A", style: { marginLeft: 6 } })
-          ),
-
-          e("div", { style: { display: "flex", justifyContent: "center", alignItems: "center", gap: 20, marginTop: 20 } },
-            e("button", { onClick: function () { window.Android && window.Android.exportCsv && window.Android.exportCsv(); }, style: { background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, color: D.muted, fontFamily: "inherit", fontSize: 13 } },
-              e(Ico, { name: "Download", size: 13, color: D.muted }), " Export CSV"
-            ),
-            e("div", { style: { width: 4, height: 4, borderRadius: "50%", background: D.muted } }),
-            e("button", { onClick: function () { window.Android && window.Android.clearData && window.Android.clearData(); }, style: { background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, color: D.doom + "99", fontFamily: "inherit", fontSize: 13 } },
-              e(Ico, { name: "Trash2", size: 13, color: D.doom + "99" }), " Clear Data"
-            )
           )
         );
       }
@@ -810,14 +1021,10 @@
         /* Heatmap bar color */
         function heatCol(v) { return v > 0.6 ? D.doomMag : v > 0.4 ? "#9333ea" : D.safe; }
 
-        /* Circadian Stats Computation */
-        var usingCircadianFallback = (!Array.isArray(p.circadian) || p.circadian.length === 0) && (!window.circadian || !Array.isArray(window.circadian) || window.circadian.length === 0);
-        var circData = usingCircadianFallback ? [
-          { h: '00', doom: 0.72 }, { h: '02', doom: 0.81 }, { h: '04', doom: 0.62 },
-          { h: '06', doom: 0.21 }, { h: '08', doom: 0.18 }, { h: '10', doom: 0.24 },
-          { h: '12', doom: 0.38 }, { h: '14', doom: 0.44 }, { h: '16', doom: 0.35 },
-          { h: '18', doom: 0.58 }, { h: '20', doom: 0.76 }, { h: '22', doom: 0.89 }
-        ] : (Array.isArray(p.circadian) && p.circadian.length > 0 ? p.circadian : window.circadian);
+        /* Circadian Stats Computation (Global Historical Model) */
+        var circData = (p && Array.isArray(p.circadian)) ? p.circadian : [];
+        var usingCircadianFallback = circData.length === 0;
+
         var maxD = -1, minD = 2, peakH = "22", safeH = "06";
         circData.forEach(function (d) {
           if (d.doom > maxD) { maxD = d.doom; peakH = d.h; }
@@ -840,7 +1047,7 @@
         var peakCc = circData.findIndex(function (d) { return d.h === peakH; });
         if (peakCc < 0) peakCc = 0;
         var actualCc = cc !== null ? cc : peakCc;
-        var curCirc = circData[actualCc] || circData[0];
+        var curCirc = circData[actualCc] || circData[0] || { h: "00", doom: 0 };
 
         return e("div", { className: "slide-up", style: { padding: "16px 16px 32px", position: "relative", zIndex: 1 } },
 
@@ -860,17 +1067,16 @@
             e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 } },
               e("div", null,
                 e(Label, null, "Cognitive Stability Index"),
-                e("div", { style: { fontSize: 13, color: D.text, marginTop: 4, fontWeight: 600 } }, "Neural Load Assessment · Last 10 Sessions")
+                e("div", { style: { fontSize: 13, color: D.text, marginTop: 4, fontWeight: 600 } }, "Global Behavioral Baseline · All Sessions")
               ),
-              e(Tag, { label: S.doom_label })
+              e(Tag, { label: S ? S.doom_label : "CALIBRATING" })
             ),
             e("div", { style: { display: "flex", alignItems: "center", gap: 16 } },
-              e(DoomGauge, { value: 1.0 - S.S_t, customColor: riskColor(S.S_t), label: riskText(S.S_t) }),
               e("div", { style: { flex: 1, display: "flex", flexDirection: "column", gap: 9 } },
-                [{ label: "Capture Rate · All-Time", v: Math.round(S.capture_rate * 100) + "%", col: D.doomMag },
-                { label: "Doom Inertia", v: Math.round(S.A[1][1] * 100) + "%", col: D.doom },
-                { label: "Escape Rate", v: Math.round(S.A[1][0] * 100) + "%", col: D.safe },
-                { label: "Pull Index", v: S.doom_pull_index + "x", col: D.warn }
+                [{ label: "Capture Rate · All-Time", v: Math.round((S ? S.capture_rate : 0) * 100) + "%", col: D.doomMag },
+                { label: "Doom Inertia", v: Math.round((S && S.A ? S.A[1][1] : 0) * 100) + "%", col: D.doom },
+                { label: "Escape Rate", v: Math.round((S && S.A ? S.A[1][0] : 0) * 100) + "%", col: D.safe },
+                { label: "Pull Index", v: (S ? S.doom_pull_index : 0) + "x", col: D.warn }
                 ].map(function (it) {
                   return e("div", { key: it.label, style: { display: "flex", justifyContent: "space-between", alignItems: "center" } },
                     e(Label, null, it.label),
@@ -880,50 +1086,10 @@
               )
             ),
             e("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 14 } },
-              [{ label: "Total Reels", v: p.totalReelsAll || RD.length, col: "#fff" }, { label: "Model Confidence", v: Math.round(S.model_confidence * 100) + "%", col: D.violet }].map(function (it) {
+              [{ label: "Total Reels", v: p.totalReelsAll || (RD ? RD.length : 0), col: "#fff" }, { label: "Model Confidence", v: Math.round((S ? S.model_confidence : 0) * 100) + "%", col: D.violet }].map(function (it) {
                 return e("div", { key: it.label, style: { padding: "10px 12px", borderRadius: 10, background: "rgba(0,0,0,0.35)", border: "1px solid " + D.border } },
                   e("div", { className: "spacemono", style: { fontSize: 18, color: it.col } }, it.v),
                   e(Label, { style: { display: "block", marginTop: 2 } }, it.label)
-                );
-              })
-            )
-          ),
-
-          /* ── State Dynamics ── */
-          e("div", { className: "card", style: { padding: "16px", marginBottom: 10 } },
-            e("div", { style: { marginBottom: 12 } }, e(Label, null, "State Dynamics")),
-            e("svg", { width: "100%", viewBox: "0 0 340 110", style: { overflow: "visible" } },
-              e("circle", { cx: "70", cy: "55", r: "40", fill: D.safe + "10", stroke: D.safe, strokeWidth: 1.5, style: { filter: "drop-shadow(0 0 10px " + D.safe + "44)" } }),
-              e("text", { x: "70", y: "50", textAnchor: "middle", fontFamily: "Space Grotesk", fontSize: "11", fontWeight: "700", fill: D.safe }, "CASUAL"),
-              e("text", { x: "70", y: "65", textAnchor: "middle", fontFamily: "Share Tech Mono", fontSize: "9", fill: D.muted }, "STATE 0"),
-              e("circle", { cx: "270", cy: "55", r: "40", fill: D.doomMag + "10", stroke: D.doomMag, strokeWidth: 1.5, style: { filter: "drop-shadow(0 0 10px " + D.doomMag + "44)" } }),
-              e("text", { x: "270", y: "50", textAnchor: "middle", fontFamily: "Space Grotesk", fontSize: "11", fontWeight: "700", fill: D.doomMag }, "DOOM"),
-              e("text", { x: "270", y: "65", textAnchor: "middle", fontFamily: "Share Tech Mono", fontSize: "9", fill: D.muted }, "STATE 1"),
-              e("path", { d: "M 108 38 Q 170 0 232 38", fill: "none", stroke: D.doomMag, strokeWidth: 2.5, style: { filter: "drop-shadow(0 0 4px " + D.doomMag + ")" } }),
-              e("polygon", { points: "232,38 222,32 226,44", fill: D.doomMag }),
-              e("text", { x: "170", y: "14", textAnchor: "middle", fontFamily: "Share Tech Mono", fontSize: "11", fontWeight: "700", fill: D.doomMag }, Math.round(S.A[0][1] * 100) + "%"),
-              e("text", { x: "170", y: "26", textAnchor: "middle", fontFamily: "Space Grotesk", fontSize: "8", fill: D.muted }, "TRAP"),
-              e("path", { d: "M 232 72 Q 170 110 108 72", fill: "none", stroke: D.safe, strokeWidth: 1.5, strokeDasharray: "5,3", opacity: .7 }),
-              e("polygon", { points: "108,72 120,66 118,78", fill: D.safe, opacity: .7 }),
-              e("text", { x: "170", y: "105", textAnchor: "middle", fontFamily: "Share Tech Mono", fontSize: "11", fontWeight: "700", fill: D.safe }, Math.round(S.A[1][0] * 100) + "%"),
-              e("text", { x: "170", y: "93", textAnchor: "middle", fontFamily: "Space Grotesk", fontSize: "8", fill: D.muted }, "ESCAPE"),
-              e("text", { x: "70", y: "14", textAnchor: "middle", fontFamily: "Share Tech Mono", fontSize: "9", fill: D.safe + "99" }, "↺ " + Math.round(S.A[0][0] * 100) + "%"),
-              e("text", { x: "270", y: "14", textAnchor: "middle", fontFamily: "Share Tech Mono", fontSize: "9", fill: D.doomMag + "cc" }, "↺ " + Math.round(S.A[1][1] * 100) + "%"),
-              e("circle", { r: "4", fill: D.doomMag, style: { filter: "drop-shadow(0 0 5px " + D.doomMag + ")" } },
-                e("animateMotion", { path: "M 108 38 Q 170 0 232 38", dur: "4.5s", repeatCount: "indefinite" })
-              ),
-              e("circle", { r: "4", fill: D.safe, opacity: .8, style: { filter: "drop-shadow(0 0 5px " + D.safe + ")" } },
-                e("animateMotion", { path: "M 232 72 Q 170 110 108 72", dur: "4.5s", repeatCount: "indefinite" })
-              )
-            ),
-            e("div", { style: { display: "flex", gap: 8, marginTop: 8 } },
-              [{ label: "Recovery Window", v: cd + "r", col: D.safe },
-              { label: "Regime Life", v: S.regime_stability.toFixed(0) + "r", col: D.warn },
-              { label: "Conf", v: Math.round(S.model_confidence * 100) + "%", col: D.violet }
-              ].map(function (it) {
-                return e("div", { key: it.label, style: { flex: 1, padding: "8px", borderRadius: 8, textAlign: "center", background: it.col + "10", border: "1px solid " + it.col + "25" } },
-                  e("div", { className: "mono", style: { fontSize: 13, color: it.col, textShadow: "0 0 8px " + it.col } }, it.v),
-                  e(Label, { style: { fontSize: 9 } }, it.label)
                 );
               })
             )
@@ -1006,37 +1172,61 @@
 
           /* ── Removed Top Doom Drivers (Stitch style) per requirements ── */
 
-          /* ── Capture Timeline ── */
-          (function () {
-            var dl = (RD.length > 0 && RD[0].r && String(RD[0].r).indexOf("Session") !== -1) ? "Session" : "Reel";
-            var dlUp = dl.toUpperCase();
-            return e("div", { className: "card", style: { padding: "16px", marginBottom: 10 } },
-              e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 } },
-                e("div", null,
-                  e(Label, { style: { display: "block", marginBottom: 2 } }, "Session Topology"),
-                  e("div", { className: "mono", style: { fontSize: 9, color: D.muted } }, "Per Reel Doom Check")
-                ),
-                e("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
-                  e("div", { style: { display: "flex", alignItems: "center", gap: 4, background: "rgba(255,255,255,0.05)", padding: "3px 8px", borderRadius: 4 } },
-                    e("div", { className: "pulse", style: { width: 6, height: 6, borderRadius: "50%", background: D.doomMag } }),
-                    e("span", { className: "mono", style: { fontSize: 9, color: D.text } }, dlUp + " " + (rc + 1) + " · " + Math.round(cur.p * 100) + "%")
-                  ),
-                  cur.exit && e("span", { className: "mono", style: { fontSize: 9, color: D.doom } }, "EXIT"),
-                  cur.back && e("span", { className: "mono", style: { fontSize: 9, color: D.warn } }, "REWATCH")
-                )
-              ),
-              e("div", { style: { height: 120, overflow: "hidden" } },
-                e(AreaChartSVG, { data: RD, cursor: rc, height: 110 })
-              ),
-              e("div", { style: { marginTop: 8 } },
-                e("input", { type: "range", min: 0, max: Math.max(0, RD.length - 1), value: rc, onChange: function (ev) { setRc(+ev.target.value); } }),
-                e("div", { style: { display: "flex", justifyContent: "space-between", marginTop: 2 } },
-                  e(Label, { style: { fontSize: 9 } }, dl + " 1"),
-                  e(Label, { style: { fontSize: 9 } }, dl + " " + RD.length)
+          /* ── Circadian Doom Profile (24h Pattern) ── */
+          e("div", { className: "card", style: { padding: "16px", marginBottom: 10 } },
+
+            e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 } },
+              e(Label, null, "Circadian Doom Profile · 24h Pattern"),
+              e("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
+                e("div", { style: { display: "flex", alignItems: "center", gap: 4, background: "rgba(255,255,255,0.05)", padding: "3px 8px", borderRadius: 4 } },
+                  e("div", { className: "pulse", style: { width: 6, height: 6, borderRadius: "50%", background: D.doomMag } }),
+                  e("span", { className: "mono", style: { fontSize: 9, color: D.text } }, fmtH(curCirc.h) + " · " + Math.round((curCirc.doom || 0) * 100) + "%")
                 )
               )
-            );
-          })(),
+            ),
+            e("div", { style: { fontSize: 11, color: D.muted, marginBottom: 16, fontFamily: "'JetBrains Mono', monospace", lineHeight: 1.6 } },
+              "All-time sessions · Average HMM capture probability by hour"
+            ),
+            e("div", {
+              style: {
+                height: 160, overflow: "visible", marginTop: 10,
+                display: "flex", alignItems: "center", justifyContent: "center"
+              }
+            },
+              circData.length > 0
+                ? e(CircadianAreaChartSVG, {
+                  data: circData, height: 110, cursor: actualCc
+                })
+                : e("div", { style: { textAlign: "center" } },
+                  e("div", {
+                    className: "mono", style: {
+                      fontSize: 11,
+                      color: D.muted, marginBottom: 6
+                    }
+                  },
+                    (usingCircadianFallback ? "Behavioral pattern initializing..." : "Data sync incomplete")),
+                  e("div", {
+                    className: "mono", style: {
+                      fontSize: 9,
+                      color: D.muted + "88"
+                    }
+                  },
+                    "Each session trains the circadian model")
+                )
+            ),
+            e("div", { style: { marginTop: -20, position: "relative", zIndex: 10 } },
+              e("input", { type: "range", min: 0, max: Math.max(0, circData.length - 1), value: actualCc, onChange: function (ev) { setCc(+ev.target.value); } }),
+            ),
+
+            !usingCircadianFallback && e("div", { style: { display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap", marginBottom: 14 } },
+              e("div", { className: "card", style: { padding: "6px 10px", background: "rgba(236,72,153,0.08)", borderColor: "rgba(236,72,153,0.2)", color: "rgba(236,72,153,0.8)", fontSize: 10, fontFamily: "'JetBrains Mono', monospace" } }, peakText),
+              e("div", { className: "card", style: { padding: "6px 10px", background: "rgba(34,211,238,0.08)", borderColor: "rgba(34,211,238,0.2)", color: "rgba(34,211,238,0.8)", fontSize: 10, fontFamily: "'JetBrains Mono', monospace" } }, safeText),
+              e("div", { className: "card", style: { padding: "6px 10px", background: "rgba(251,191,36,0.08)", borderColor: "rgba(251,191,36,0.2)", color: "rgba(251,191,36,0.8)", fontSize: 10, fontFamily: "'JetBrains Mono', monospace" } }, escText)
+            ),
+            !usingCircadianFallback && e("div", { style: { padding: "10px 14px", background: "rgba(34,211,238,0.04)", borderRadius: 10, borderLeft: "2px solid rgba(34,211,238,0.3)", fontSize: 11, color: "rgba(248,250,252,0.55)", lineHeight: 1.7 } },
+              e("strong", { style: { color: "rgba(34,211,238,0.8)" } }, "What this means: "), whatMeansDesc
+            )
+          ),
 
           /* ── Doom Score Anatomy (Interactive) ── */
           e("div", { className: "card", style: { marginBottom: 10, overflow: "hidden" } },
@@ -1050,108 +1240,141 @@
                   marginBottom: 12, padding: "4px 8px", background: D.warn + "08",
                   borderRadius: 4, borderLeft: "2px solid " + D.warn + "33"
                 }
-              }, "Heuristic estimates · not HMM posteriors · use for directional guidance only"),
-              [
-                { k: "length", l: "Session Length", icon: "BarChart2", desc: "Your session exceeded the " + avgRls + "-reel baseline. This is the strongest indicator of compromised volition." },
-                { k: "volitional_conflict", l: "Exit Conflict", icon: "Lock", desc: "You repeatedly closed and re-opened the app within a 20s window, indicating internal conflict." },
-                { k: "rapid_reentry", l: "Rapid Re-entry", icon: "Zap", desc: "Short intervals between sessions. The model interprets this as a failure to transition to a resting state." },
-                { k: "automaticity", l: "Scroll Automaticity", icon: "Activity", desc: "Extremely low variance in your swipe cadence. The rhythm has become robotic and stimulus-bound." },
-                { k: "dwell_collapse", l: "Dwell Collapse", icon: "TrendingDown", desc: "Your average dwell time per reel dropped significantly compared to the start of the session." },
-                { k: "rewatch", l: "Rewatch Compulsion", icon: "Radio", desc: "High number of back-scrolls to re-consume content you already viewed. A key marker of capture." },
-                { k: "environment", l: "Environment", icon: "Moon", desc: "Late night usage heavily penalizes your score due to the circadian disruption risk." }
-              ].map(function (it) {
-                var v = S.doom_components[it.k] || 0.5;
-                var col = v > 0.7 ? D.doomMag : v > 0.45 ? D.warn : D.safe;
-                var isExpanded = exp === "anatomy_" + it.k;
-                return e("div", {
-                  key: it.k,
-                  className: "ripple-surface",
-                  onClick: function () { tog(isExpanded ? null : "anatomy_" + it.k); },
-                  style: { marginBottom: 14, cursor: "pointer" }
-                },
-                  e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 } },
-                    e("div", { style: { display: "flex", alignItems: "center", gap: 8 } },
-                      e("div", { style: { width: 28, height: 28, borderRadius: 8, background: col + "18", border: "1px solid " + col + "33", display: "flex", alignItems: "center", justifyContent: "center" } },
-                        e(Ico, { name: it.icon, size: 13, color: col })
-                      ),
-                      e("div", null,
-                        e("div", { style: { fontSize: 13, fontWeight: 600, color: D.text } }, it.l),
-                        e("div", { className: "mono", style: { fontSize: 9, color: D.muted } }, "weight: " + (v * 100).toFixed(0) + "%")
-                      )
-                    ),
-                    e("span", { className: "mono", style: { fontSize: 16, fontWeight: 700, color: col, textShadow: "0 0 10px " + col + "66" } }, Math.round(v * 100) + "%")
-                  ),
-                  e("div", { style: { height: 4, background: "rgba(255,255,255,0.05)", borderRadius: 4, overflow: "hidden" } },
-                    e("div", { style: { height: "100%", width: (v * 100) + "%", background: "linear-gradient(90deg," + col + "88," + col + ")", borderRadius: 4, boxShadow: "0 0 8px " + col + "55", transition: "width 1.2s cubic-bezier(0.4,0,0.2,1)" } })
-                  ),
-                  isExpanded && e("div", { style: { marginTop: 8, padding: "8px 12px", background: col + "08", border: "1px solid " + col + "22", borderRadius: 8, fontSize: 11, color: "rgba(248,250,252,0.6)", lineHeight: 1.7 } },
-                    it.desc
-                  )
-                );
-              }),
+              }, "These drivers explain why your score is high — behavioral patterns learned from your sessions, not population averages"),
               (function () {
-                var maxK = "length", maxV = 0;
-                var names = {
-                  "length": "Session Length",
-                  "volitional_conflict": "Exit Conflict",
-                  "rapid_reentry": "Rapid Re-entry",
-                  "automaticity": "Scroll Automaticity",
-                  "dwell_collapse": "Dwell Collapse",
-                  "rewatch": "Rewatch Compulsion",
-                  "environment": "Environment"
+                var DOOM_WEIGHTS_DEFAULT = {
+                  session_length: 0.143,
+                  exit_conflict: 0.143,
+                  rapid_reentry: 0.143,
+                  scroll_automaticity: 0.143,
+                  dwell_collapse: 0.143,
+                  rewatch_compulsion: 0.143,
+                  environment: 0.142 // Sums to 1.0
                 };
-                for (var k in S.doom_components) {
-                  if (S.doom_components[k] > maxV) {
-                    maxV = S.doom_components[k];
-                    maxK = k;
-                  }
-                }
-                var actL = names[maxK] || "Session Length";
-                var actP = Math.round(maxV * 100);
-                return e("div", { style: { marginTop: 6, padding: "10px 14px", background: "rgba(236,72,153,0.04)", borderRadius: 10, borderLeft: "2px solid rgba(236,72,153,0.3)", fontSize: 11, color: "rgba(248,250,252,0.55)", lineHeight: 1.7 } },
-                  e("strong", { style: { color: "rgba(236,72,153,0.7)" } }, "What this means: "), actL + " is your single biggest lever (" + actP + "% weight). Tap any driver to see the exact behavioral signal behind the score."
-                );
+                var DOOM_WEIGHTS = (p.scorerComponentWeights &&
+                  Object.keys(p.scorerComponentWeights).length === 7)
+                  ? p.scorerComponentWeights
+                  : DOOM_WEIGHTS_DEFAULT;
+                var totalWeighted = Object.keys(S.doom_components || {}).reduce(function (sum, k) {
+                  return sum + (S.doom_components[k] || 0) * (DOOM_WEIGHTS[k] || 0);
+                }, 0);
+                var items = [
+                  { k: "session_length", l: "Session Length", icon: "BarChart2", desc: "Your session exceeded your historical average of " + avgRls + " reels. This is the strongest indicator of compromised volition." },
+                  { k: "exit_conflict", l: "Exit Conflict", icon: "Lock", desc: "You repeatedly closed and re-opened the app within a 20s window, indicating internal conflict." },
+                  { k: "rapid_reentry", l: "Rapid Re-entry", icon: "Zap", desc: "Short intervals between sessions. The model interprets this as a failure to transition to a resting state." },
+                  { k: "scroll_automaticity", l: "Scroll Automaticity", icon: "Activity", desc: "Extremely low variance in your swipe cadence. The rhythm has become robotic and stimulus-bound." },
+                  { k: "dwell_collapse", l: "Dwell Collapse", icon: "TrendingDown", desc: "Your average dwell time per reel dropped significantly compared to the start of the session." },
+                  { k: "rewatch_compulsion", l: "Rewatch Compulsion", icon: "Radio", desc: "High number of back-scrolls to re-consume content you already viewed. A key marker of capture." },
+                  { k: "environment", l: "Environment", icon: "Moon", desc: "Late night usage heavily penalizes your score due to the circadian disruption risk." }
+                ];
+                var maxK = "session_length", maxPct = 0;
+                return [
+                  items.map(function (it) {
+                    var raw = (S && S.doom_components) ? (S.doom_components[it.k] || 0) : 0;
+                    var weighted = raw * (DOOM_WEIGHTS[it.k] || 0);
+                    var contribution = totalWeighted > 0 ? weighted / totalWeighted : 0;
+                    var pct = Math.round(contribution * 100);
+                    if (pct > maxPct) { maxPct = pct; maxK = it.k; }
+                    var col = contribution > 0.25 ? D.doomMag : contribution > 0.15 ? D.warn : D.safe;
+                    var isExpanded = exp === "anatomy_" + it.k;
+                    return e("div", {
+                      key: it.k,
+                      className: "ripple-surface",
+                      onClick: function () { tog(isExpanded ? null : "anatomy_" + it.k); },
+                      style: { marginBottom: 14, cursor: "pointer" }
+                    },
+                      e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 } },
+                        e("div", { style: { display: "flex", alignItems: "center", gap: 8 } },
+                          e("div", { style: { width: 28, height: 28, borderRadius: 8, background: col + "18", border: "1px solid " + col + "33", display: "flex", alignItems: "center", justifyContent: "center" } },
+                            e(Ico, { name: it.icon, size: 13, color: col })
+                          ),
+                          e("div", null,
+                            e("div", { style: { fontSize: 13, fontWeight: 600, color: D.text } }, it.l),
+                            (function () {
+                              var currentW = DOOM_WEIGHTS[it.k] || 0;
+                              var defaultW = DOOM_WEIGHTS_DEFAULT[it.k] || 0;
+                              var drift = currentW - defaultW;
+                              var driftPct = Math.round(Math.abs(drift) * 100);
+                              var showDrift = driftPct >= 3;
+                              var driftCol = drift > 0 ? D.doom : D.safe;
+                              var driftLabel = drift > 0
+                                ? "▲ +" + driftPct + "% from default"
+                                : "▼ −" + driftPct + "% from default";
+                              return e("div", { style: { display: "flex", flexDirection: "column", gap: 2 } },
+                                e("div", {
+                                  className: "mono",
+                                  style: { fontSize: 9, color: D.muted }
+                                },
+                                  "weight: " + Math.round(currentW * 100) + "%"),
+                                showDrift && e("div", {
+                                  className: "mono",
+                                  style: {
+                                    fontSize: 8, color: driftCol,
+                                    opacity: 0.8, letterSpacing: "0.05em"
+                                  }
+                                },
+                                  driftLabel)
+                              );
+                            })()
+                          )
+                        ),
+                        e("span", { className: "mono", style: { fontSize: 16, fontWeight: 700, color: col, textShadow: "0 0 10px " + col + "66" } }, pct + "%")
+                      ),
+                      e("div", { style: { height: 4, background: "rgba(255,255,255,0.05)", borderRadius: 4, overflow: "hidden" } },
+                        e("div", { style: { height: "100%", width: (contribution * 100) + "%", background: "linear-gradient(90deg," + col + "88," + col + ")", borderRadius: 4, boxShadow: "0 0 8px " + col + "55", transition: "width 1.2s cubic-bezier(0.4,0,0.2,1)" } })
+                      ),
+                      isExpanded && e("div", { style: { marginTop: 8, padding: "8px 12px", background: col + "08", border: "1px solid " + col + "22", borderRadius: 8, fontSize: 11, color: "rgba(248,250,252,0.6)", lineHeight: 1.7 } },
+                        it.desc
+                      )
+                    );
+                  }),
+                  e("div", { style: { marginTop: 6, padding: "10px 14px", background: "rgba(236,72,153,0.04)", borderRadius: 10, borderLeft: "2px solid rgba(236,72,153,0.3)", fontSize: 11, color: "rgba(248,250,252,0.55)", lineHeight: 1.7 } },
+                    e("strong", { style: { color: "rgba(236,72,153,0.7)" } }, "What this means: "),
+                    (function () { var names = { session_length: "Session Length", exit_conflict: "Exit Conflict", rapid_reentry: "Rapid Re-entry", scroll_automaticity: "Scroll Automaticity", dwell_collapse: "Dwell Collapse", rewatch_compulsion: "Rewatch Compulsion", environment: "Environment" }; return (names[maxK] || "Session Length") + " is your single biggest lever (" + maxPct + "% contribution). Tap any driver to see the exact behavioral signal behind the score."; })()
+                  )
+                ];
               })()
             )
           ),
 
-          /* ── Circadian Doom Profile (24h Pattern) ── */
+          /* ── Capture Timeline ── */
+          e(SessionTopologyCanvas, { data: RD, cursor: rc, setCursor: setRc, height: 160 }),
+
+
+          /* ── State Dynamics ── */
           e("div", { className: "card", style: { padding: "16px", marginBottom: 10 } },
-            usingCircadianFallback && e("div", {
-              style: {
-                padding: "6px 12px", borderRadius: 6, marginBottom: 8,
-                background: D.warn + "12", border: "1px solid " + D.warn + "33",
-                fontSize: 10, color: D.warn, fontFamily: "monospace"
-              }
-            }, "⚠  Example pattern — insufficient personal data. Scroll more sessions to unlock."),
-            e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 } },
-              e(Label, null, "Circadian Doom Profile · 24h Pattern"),
-              e("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
-                e("div", { style: { display: "flex", alignItems: "center", gap: 4, background: "rgba(255,255,255,0.05)", padding: "3px 8px", borderRadius: 4 } },
-                  e("div", { className: "pulse", style: { width: 6, height: 6, borderRadius: "50%", background: "#A855F7" } }),
-                  e("span", { className: "mono", style: { fontSize: 9, color: D.text } }, fmtH(curCirc.h) + " · " + Math.round(curCirc.doom * 100) + "%")
-                )
+            e("div", { style: { marginBottom: 12 } }, e(Label, null, "State Dynamics")),
+            e("svg", { width: "100%", viewBox: "0 0 340 110", style: { overflow: "visible" } },
+              e("circle", { cx: "70", cy: "55", r: "40", fill: D.safe + "10", stroke: D.safe, strokeWidth: 1.5, style: { filter: "drop-shadow(0 0 10px " + D.safe + "44)" } }),
+              e("text", { x: "70", y: "50", textAnchor: "middle", fontFamily: "Space Grotesk", fontSize: "11", fontWeight: "700", fill: D.safe }, "CASUAL"),
+              e("text", { x: "70", y: "65", textAnchor: "middle", fontFamily: "Share Tech Mono", fontSize: "9", fill: D.muted }, "STATE 0"),
+              e("circle", { cx: "270", cy: "55", r: "40", fill: D.doomMag + "10", stroke: D.doomMag, strokeWidth: 1.5, style: { filter: "drop-shadow(0 0 10px " + D.doomMag + "44)" } }),
+              e("text", { x: "270", y: "50", textAnchor: "middle", fontFamily: "Space Grotesk", fontSize: "11", fontWeight: "700", fill: D.doomMag }, "DOOM"),
+              e("text", { x: "270", y: "65", textAnchor: "middle", fontFamily: "Share Tech Mono", fontSize: "9", fill: D.muted }, "STATE 1"),
+              e("path", { d: "M 108 38 Q 170 0 232 38", fill: "none", stroke: D.doomMag, strokeWidth: 2.5, style: { filter: "drop-shadow(0 0 4px " + D.doomMag + ")" } }),
+              e("polygon", { points: "232,38 222,32 226,44", fill: D.doomMag }),
+              e("text", { x: "170", y: "20", textAnchor: "middle", fontFamily: "Share Tech Mono", fontSize: "11", fontWeight: "700", fill: D.doomMag }, Math.round((S ? S.A[0][1] : 0) * 100) + "%"),
+              e("path", { d: "M 232 72 Q 170 110 108 72", fill: "none", stroke: D.safe, strokeWidth: 1.5, strokeDasharray: "5,3", opacity: .7 }),
+              e("polygon", { points: "108,72 120,66 118,78", fill: D.safe, opacity: .7 }),
+              e("text", { x: "170", y: "100", textAnchor: "middle", fontFamily: "Share Tech Mono", fontSize: "11", fontWeight: "700", fill: D.safe }, Math.round((S ? S.A[1][0] : 0) * 100) + "%"),
+              e("text", { x: "70", y: "14", textAnchor: "middle", fontFamily: "Share Tech Mono", fontSize: "9", fill: D.safe + "99" }, "↺ " + Math.round((S ? S.A[0][0] : 0) * 100) + "%"),
+              e("text", { x: "270", y: "14", textAnchor: "middle", fontFamily: "Share Tech Mono", fontSize: "9", fill: D.doomMag + "cc" }, "↺ " + Math.round((S ? S.A[1][1] : 0) * 100) + "%"),
+              e("circle", { r: "4", fill: D.doomMag, style: { filter: "drop-shadow(0 0 5px " + D.doomMag + ")" } },
+                e("animateMotion", { path: "M 108 38 Q 170 0 232 38", dur: "4.5s", repeatCount: "indefinite" })
+              ),
+              e("circle", { r: "4", fill: D.safe, opacity: .8, style: { filter: "drop-shadow(0 0 5px " + D.safe + ")" } },
+                e("animateMotion", { path: "M 232 72 Q 170 110 108 72", dur: "4.5s", repeatCount: "indefinite" })
               )
             ),
-            e("div", { style: { fontSize: 11, color: D.muted, marginBottom: 16, fontFamily: "'JetBrains Mono', monospace", lineHeight: 1.6 } },
-              "All-time sessions · Average HMM capture probability by hour"
-            ),
-            e("div", { style: { height: 160, overflow: "visible", marginTop: 10 } },
-              e(CircadianAreaChartSVG, {
-                data: circData, height: 110, cursor: actualCc
+            e("div", { style: { display: "flex", gap: 8, marginTop: 8 } },
+              [{ label: "Recovery Window", v: cd + " reels", col: D.safe },
+              { label: "Model Confidence", v: Math.round(S.model_confidence * 100) + "%", col: D.violet }
+              ].map(function (it) {
+                return e("div", { key: it.label, style: { flex: 1, padding: "8px", borderRadius: 8, textAlign: "center", background: it.col + "10", border: "1px solid " + it.col + "25" } },
+                  e("div", { className: "mono", style: { fontSize: 13, color: it.col, textShadow: "0 0 8px " + it.col } }, it.v),
+                  e(Label, { style: { fontSize: 9 } }, it.label)
+                );
               })
-            ),
-            e("div", { style: { marginTop: -20, position: "relative", zIndex: 10 } },
-              e("input", { type: "range", min: 0, max: Math.max(0, circData.length - 1), value: actualCc, onChange: function (ev) { setCc(+ev.target.value); } }),
-            ),
-
-            e("div", { style: { display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap", marginBottom: 14 } },
-              e("div", { className: "card", style: { padding: "6px 10px", background: "rgba(236,72,153,0.08)", borderColor: "rgba(236,72,153,0.2)", color: "rgba(236,72,153,0.8)", fontSize: 10, fontFamily: "'JetBrains Mono', monospace" } }, peakText),
-              e("div", { className: "card", style: { padding: "6px 10px", background: "rgba(34,211,238,0.08)", borderColor: "rgba(34,211,238,0.2)", color: "rgba(34,211,238,0.8)", fontSize: 10, fontFamily: "'JetBrains Mono', monospace" } }, safeText),
-              e("div", { className: "card", style: { padding: "6px 10px", background: "rgba(251,191,36,0.08)", borderColor: "rgba(251,191,36,0.2)", color: "rgba(251,191,36,0.8)", fontSize: 10, fontFamily: "'JetBrains Mono', monospace" } }, escText)
-            ),
-            e("div", { style: { padding: "10px 14px", background: "rgba(34,211,238,0.04)", borderRadius: 10, borderLeft: "2px solid rgba(34,211,238,0.3)", fontSize: 11, color: "rgba(248,250,252,0.55)", lineHeight: 1.7 } },
-              e("strong", { style: { color: "rgba(34,211,238,0.8)" } }, "What this means: "), whatMeansDesc
             )
           ),
 
@@ -1224,8 +1447,8 @@
 
               e("div", { style: { marginBottom: 14 } },
                 e("strong", { style: { color: "#fff" } }, "Cognitive Stability Index"), e("br", null),
-                e("span", { style: { color: D.safe } }, "The Math: "), "Displays (1 − S_t) as a gauge, where S_t is the HMM's posterior doom probability for your last session. A value of 85% means only 15% doom probability.", e("br", null),
-                e("span", { style: { color: D.safe } }, "The Value: "), "Your real-time 'mental health reading' — how likely you are in deliberate control right now."
+                e("span", { style: { color: D.safe } }, "The Math: "), "Displays (1 − S_t) as a gauge, where S_t is the HMM's posterior probability of the 'Doom' latent state, averaged over your last 10 sessions.", e("br", null),
+                e("span", { style: { color: D.safe } }, "The Value: "), "Your real-time 'mental health reading' — how likely you are in deliberate control based on your 10-session moving average."
               ),
               e("div", { style: { marginBottom: 14 } },
                 e("strong", { style: { color: "#fff" } }, "Current Intervention Score"), e("br", null),
@@ -1296,9 +1519,8 @@
                 e("span", { style: { color: D.warn } }, "The Value: "), "Maps your biological vulnerability. Shows what time of day you are most prone to mindless scrolling."
               ),
               e("div", { style: { marginBottom: 14 } },
-                e("strong", { style: { color: "#fff" } }, "Session Topology (Per-Reel Doom Check)"), e("br", null),
-                e("span", { style: { color: D.warn } }, "The Math: "), "Plots the HMM's posterior doom probability for each individual reel within a session. The slider scrubs through reels.", e("br", null),
-                e("span", { style: { color: D.warn } }, "The Value: "), "See the exact moment within a session where your scrolling went from deliberate to automatic."
+                e("span", { style: { color: D.warn } }, "The Math: "), "Plots the HMM's posterior doom probability for each reel. Interactive Canvas provides real-time scrubbing, variable smoothing, and per-reel capture density heatmaps.", e("br", null),
+                e("span", { style: { color: D.warn } }, "The Value: "), "Forensic analysis of a session. See exactly where scrolling transitioned from intentional to automatic."
               ),
 
               /* ── LIVE SESSION METRICS ── */
@@ -1325,8 +1547,8 @@
                 e("span", { style: { color: D.violet } }, "The Value: "), "Short gaps between sessions trigger the 'Rapid Re-entry' penalty — a sign of failed disengagement."
               ),
               e("div", { style: { marginBottom: 14 } },
-                e("strong", { style: { color: "#fff" } }, "Total Sessions · Doom Sessions · Interactions"), e("br", null),
-                e("span", { style: { color: D.violet } }, "The Math: "), "Total = count of all detected sessions. Doom = sessions where S_t ≥ 0.50. Interactions = sum of likes + comments + shares + saves.", e("br", null),
+                e("strong", { style: { color: "#fff" } }, "Sessions Today · Doom Sessions · Interactions"), e("br", null),
+                e("span", { style: { color: D.violet } }, "The Math: "), "Sessions Today = count of sessions detected on the current calendar day. Doom = sessions where S_t ≥ 0.50. Interactions = sum of likes + comments + shares + saves.", e("br", null),
                 e("span", { style: { color: D.violet } }, "The Value: "), "Zero-interaction sessions are 'passive consumption' — content flowing past with no volitional response. A high passive ratio is an early automaticity signal."
               ),
 
@@ -1335,7 +1557,7 @@
 
               e("div", { style: { marginBottom: 14 } },
                 e("strong", { style: { color: "#fff" } }, "Doom Score & Top Drivers"), e("br", null),
-                e("span", { style: { color: D.doomMag } }, "The Math: "), "Evaluates 7 heuristic penalties per session: Session Length (25%), Scroll Automaticity (20%), Exit Conflict (20%), Rapid Re-entry (15%), Dwell Collapse (10%), Rewatch Compulsion (5%), and Environment (5%).", e("br", null),
+                e("span", { style: { color: D.doomMag } }, "The Math: "), "Evaluates 7 behavioral signals per session. Weights start at population defaults but adapt to your patterns over time — the model shifts weight toward whichever signals actually predict your doom state. Your current weights are shown live on the Dashboard next to each driver.", e("br", null),
                 e("span", { style: { color: D.doomMag } }, "The Value: "), "Identifies which specific behavioral pattern is driving your score — so you know what to work on."
               ),
               e("div", { style: { marginBottom: 14 } },
@@ -1475,7 +1697,7 @@
               e("div", { style: { width: 6, height: 6, borderRadius: "50%", background: on ? D.safe : D.doom } }),
               e("span", { className: "mono", style: { fontSize: 10, color: on ? D.safe : D.doom, letterSpacing: "0.1em" } }, "SYSTEM STATUS: " + (on ? "ACTIVE" : "INACTIVE"))
             ),
-            e(Ico, { name: "Settings", size: 18, color: D.muted })
+            e("div", { style: { width: 18 } })
           ),
 
           /* Hero Section */
@@ -1601,6 +1823,14 @@
           }
           window.reactDataCallback = handleData;
           if (window.injectedJsonData) { handleData(window.injectedJsonData); return; }
+
+          if (window.Android && window.Android.getLaunchTab) {
+            try {
+              var tab = window.Android.getLaunchTab();
+              if (tab) setScreen(tab);
+            } catch (x) { }
+          }
+
           window.showReportLoading = function (b) { setShowReportLoading(b); };
           var t = setTimeout(function () { setLoading(false); }, 300);
           return function () {
@@ -1634,70 +1864,102 @@
         }
 
         /* ── Derive session data ── */
-        var mr = rawData.sessions[rawData.sessions.length - 1];
-
-        /* ── Aggregate last 10 sessions for deeper inference ── */
         var last10 = rawData.sessions.slice(-10);
-        var l10_avgSt = last10.reduce(function (a, b) { return a + b.S_t; }, 0) / last10.length;
-        var l10_avgNReels = last10.reduce(function (a, b) { return a + (b.nReels || 0); }, 0) / last10.length;
-        var l10_avgDwellAvg = last10.reduce(function (a, b) { return a + parseFloat(b.avgDwell || b.meanDwell || b.avg_dwell || 0); }, 0) / last10.length;
+        var allSt = rawData.sessions.map(function (s) { return s.S_t; });
+        var avgSt = allSt.reduce(function (a, b) { return a + b; }, 0) / Math.max(rawData.sessions.length, 1);
+
+        var mr = rawData.sessions[rawData.sessions.length - 1] || { S_t: 0, dominantState: 0, date: '00-00', timePeriod: 'Day', nReels: 0, avgDwell: 0 };
+        var todayStr = mr.date;
+
+        var qualifyingSessions = rawData.sessions.filter(function (s) { return (s.nReels || 0) >= 5; });
+        var pLostTrack = qualifyingSessions.length > 0
+          ? qualifyingSessions.filter(function (s) { return s.dominantState === 1; }).length / qualifyingSessions.length
+          : 0;
+
+        var globalCSI = (1.0 - pLostTrack);
+        var l10_avgSt = last10.length > 0 ? last10.reduce(function (a, b) { return a + b.S_t; }, 0) / last10.length : 0;
+        var neuralLoad = l10_avgSt;
+
+        var l10_avgNReels = last10.reduce(function (a, b) { return a + (b.nReels || 0); }, 0) / Math.max(last10.length, 1);
+        var l10_avgDwellAvg = last10.reduce(function (a, b) { return a + parseFloat(b.avgDwell || b.meanDwell || b.avg_dwell || 0); }, 0) / Math.max(last10.length, 1);
         var l10_totalDurationSec = last10.reduce(function (a, b) { return a + ((b.nReels || 0) * parseFloat(b.avgDwell || b.meanDwell || b.avg_dwell || 0)); }, 0);
-        var l10_avgDurationSec = l10_totalDurationSec / last10.length;
+        var l10_avgDurationSec = l10_totalDurationSec / Math.max(last10.length, 1);
         var l10_m = Math.floor(l10_avgDurationSec / 60);
         var l10_s = Math.round(l10_avgDurationSec % 60);
 
-        var allSt = rawData.sessions.map(function (s) { return s.S_t; });
-        var avgSt = allSt.reduce(function (a, b) { return a + b; }, 0) / rawData.sessions.length;
-        var A = (rawData.model_parameters && rawData.model_parameters.transition_matrix) || [[0.8, 0.2], [0.2, 0.8]];
-
-        var totalDwellSec = rawData.sessions.reduce(function (sum, s) { return sum + (s.avgDwell || s.meanDwell || s.avg_dwell || 0) * (s.nReels || 0); }, 0);
-        var totalDwellMin = totalDwellSec > 60 ? (totalDwellSec / 60).toFixed(1) + "m" : Math.round(totalDwellSec) + "s";
-        var overallAvgDwell = (rawData.sessions.reduce(function (sum, s) { return sum + (s.avgDwell || s.meanDwell || s.avg_dwell || 0); }, 0) / Math.max(rawData.sessions.length, 1)).toFixed(1);
-        var perReelCapture = ((rawData.timeline && rawData.timeline.p_capture) || [])
-          .filter(function (v) { return typeof v === 'number' && isFinite(v); })
-          .map(function (v) { return Math.max(0, Math.min(1, v)); }); // clamp [0,1]
         var sessionReelsSum = rawData.sessions.reduce(function (sum, s) { return sum + (s.nReels || 0); }, 0);
-        var totalReelsAll = sessionReelsSum > 0 ? sessionReelsSum : perReelCapture.length;
-        var escapeRate = Math.max(0.01, A[1][0]);
-        var avgNReels = totalReelsAll / Math.max(rawData.sessions.length, 1);
-        var pLostTrack = rawData.sessions.filter(function (s) { return s.dominantState === 1; }).length / Math.max(rawData.sessions.length, 1);
+        var overallAvgDwell = (rawData.sessions.reduce(function (a, b) { return a + (b.avgDwell || 0); }, 0) / Math.max(rawData.sessions.length, 1)).toFixed(1);
+        var avgNReels = sessionReelsSum / Math.max(rawData.sessions.length, 1);
 
-        var doomComponents = {
-          length: Math.min(1, avgNReels / 80),
-          volitional_conflict: pLostTrack,
-          rapid_reentry: Math.min(1, A[0][1] * 3),
-          automaticity: Math.min(1, A[1][1]),
-          dwell_collapse: Math.min(1, Math.max(0, 1 - (parseFloat(overallAvgDwell) / 15))),
-          rewatch: pLostTrack,
-          environment: mr.timePeriod === "Late Night" || mr.timePeriod === "Night" ? 0.8 : mr.timePeriod === "Evening" ? 0.55 : 0.3
-        };
+        var A = (rawData.model_parameters && rawData.model_parameters.transition_matrix) ? rawData.model_parameters.transition_matrix : [[0.95, 0.05], [0.1, 0.9]];
 
-        var timePeriodAvgCapture = (function () {
-          if (!mr.timePeriod) return mr.S_t;
-          var tpSess = rawData.sessions.filter(function (s) { return s.timePeriod === mr.timePeriod; });
-          if (!tpSess.length) return mr.S_t;
-          return tpSess.reduce(function (a, b) { return a + b.S_t; }, 0) / tpSess.length;
+        var mostRecentComponents = (function () {
+          for (var i = rawData.sessions.length - 1; i >= 0; i--) {
+            var s = rawData.sessions[i];
+            var hc = s.heuristic_components || s.doom_components;
+            if (hc && Object.keys(hc).length > 0) return hc;
+          }
+          return null;
         })();
 
+        var finalDoomComponents = (rawData.historical_drivers && Object.keys(rawData.historical_drivers).length > 0)
+          ? rawData.historical_drivers
+          : (mostRecentComponents ? {
+            session_length: mostRecentComponents.session_length || mostRecentComponents.length || 0,
+            exit_conflict: mostRecentComponents.exit_conflict || mostRecentComponents.volitional_conflict || 0,
+            rapid_reentry: mostRecentComponents.rapid_reentry || 0,
+            scroll_automaticity: mostRecentComponents.scroll_automaticity || mostRecentComponents.automaticity || 0,
+            dwell_collapse: mostRecentComponents.dwell_collapse || 0,
+            rewatch_compulsion: mostRecentComponents.rewatch_compulsion || mostRecentComponents.rewatch || 0,
+            environment: mostRecentComponents.environment || 0
+          } : {
+            session_length: Math.min(1, avgNReels / 80),
+            exit_conflict: pLostTrack,
+            rapid_reentry: Math.min(1, A[0][1] * 2),
+            scroll_automaticity: Math.min(1, A[1][1]),
+            dwell_collapse: Math.min(1, Math.max(0, 1 - (parseFloat(overallAvgDwell) / 15))),
+            rewatch_compulsion: pLostTrack,
+            environment: mr.timePeriod === "Late Night" || mr.timePeriod === "Night" ? 0.8 :
+              mr.timePeriod === "Evening" ? 0.55 : 0.3
+          });
+
+        var escapeRate = Math.max(0.01, A[1][0]);
+        var perReelCapture = ((rawData.timeline && rawData.timeline.p_capture) || [])
+          .filter(function (v) { return typeof v === 'number' && isFinite(v); })
+          .map(function (v) { return Math.max(0, Math.min(1, v)); });
+        var totalReelsAll = sessionReelsSum > 0 ? sessionReelsSum : perReelCapture.length;
+
+        var todayActual = (function () {
+          var now = new Date();
+          var mm = String(now.getMonth() + 1).padStart(2, "0");
+          var dd = String(now.getDate()).padStart(2, "0");
+          return mm + "-" + dd;
+        })();
+        var sessionsToday = rawData.sessions.filter(function (s) { return s.date === todayActual; });
+        var totalActiveTimeSec = sessionsToday.reduce(function (sum, s) {
+          return sum + (s.nReels || 0) * parseFloat(s.avgDwell || s.meanDwell || s.avg_dwell || 0);
+        }, 0);
+        var activeM = Math.floor(totalActiveTimeSec / 60);
+        var activeS = Math.round(totalActiveTimeSec % 60);
+        var activeTimeTodayStr = activeM > 0 ? activeM + "m " + activeS + "s" : activeS + "s";
+
         var session = Object.assign({}, mr, {
-          doom_label: riskLabel(l10_avgSt),
-          S_t: l10_avgSt,
-          doom_score: l10_avgSt,
-          model_confidence: rawData.model_confidence != null ? rawData.model_confidence : Math.min(0.95, rawData.sessions.length / 20),
-          doom_pull_index_num: (A[0][1] / Math.max(0.01, A[1][0])),
-          doom_pull_index: (A[0][1] / Math.max(0.01, A[1][0])).toFixed(1),
-          regime_stability: 1.0 / (escapeRate + 0.001),
-          sessions_today: rawData.sessions.length,
-          total_doom_sessions: rawData.sessions.filter(function (s) { return s.S_t > 0.65; }).length,
-          total_interactions: rawData.sessions.reduce(function (acc, s) { return acc + (s.totalLikes || 0) + (s.totalComments || 0) + (s.totalShares || 0) + (s.totalSaves || 0); }, 0),
-          total_dwell_today_min: totalDwellMin,
+          global_csi: globalCSI,
+          neural_load: neuralLoad,
+          intervention_score: neuralLoad, // Maps to main home gauge
           capture_rate: pLostTrack,
-          time_period_avg_capture: timePeriodAvgCapture,
-          neural_load: l10_avgSt,
-          intervention_score: Math.min(1.0, (avgSt > 0.5 ? 0.5 : 0) + pLostTrack),
-          total_doom_reels: totalReelsAll > 0 ? Math.round(rawData.sessions.reduce(function (acc, s) { return acc + (s.nReels || 0) * s.S_t; }, 0)) : 0,
           A: A,
-          doom_components: doomComponents
+          regime_stability: (rawData.model_parameters && rawData.model_parameters.regime_stability_score) || 99,
+          model_confidence: rawData.model_confidence || 0,
+          doom_label: neuralLoad >= THRESHOLDS.doom ? "DOOM" : neuralLoad > THRESHOLDS.moderate ? "BORDERLINE" : "CASUAL",
+          doom_pull_index: (A[1][1] / Math.max(0.001, A[0][1])).toFixed(1),
+          sessions_today: sessionsToday.length,
+          doom_dominance: rawData.sessions.length > 0
+            ? Math.round(rawData.sessions.filter(function (s) { return s.S_t >= MODEL_THRESHOLDS.doomLabel; }).length / rawData.sessions.length * 100) + "%"
+            : "0%",
+          total_interactions_today: sessionsToday.reduce(function (a, b) { return a + (b.totalInteractions || 0); }, 0),
+          active_time_today: activeTimeTodayStr,
+          doom_components: finalDoomComponents
         });
 
         var live = {
@@ -1712,19 +1974,28 @@
 
         var days14 = (function () {
           var names = ["S", "M", "T", "W", "T", "F", "S"];
-          var today = new Date().getDay();
-          var sessions14 = rawData.sessions.slice(-14);
-          var base = sessions14.map(function (s, i) {
-            var daysAgo = sessions14.length - 1 - i;
-            var dIdx = ((today - daysAgo) % 7 + 7) % 7;
-            return { d: names[dIdx], v: parseFloat(s.S_t.toFixed(2)) };
+          /* Group sessions by date, average S_t per day */
+          var byDate = {};
+          rawData.sessions.forEach(function (s) {
+            var dk = s.date || "unknown";
+            if (!byDate[dk]) byDate[dk] = [];
+            byDate[dk].push(s.S_t);
           });
-          var needed = 14 - base.length;
-          for (var i = needed; i >= 1; i--) {
-            var dIdx = ((today - (base.length + i - 1)) % 7 + 7) % 7;
-            base.unshift({ d: names[dIdx], v: parseFloat(avgSt.toFixed(2)) });
+          /* Build 14 calendar-day slots ending today */
+          var now = new Date();
+          var result = [];
+          for (var i = 13; i >= 0; i--) {
+            var d = new Date(now);
+            d.setDate(d.getDate() - i);
+            var mm = String(d.getMonth() + 1).padStart(2, "0");
+            var dd = String(d.getDate()).padStart(2, "0");
+            var dateKey = mm + "-" + dd;
+            var dayIdx = d.getDay();
+            var vals = byDate[dateKey];
+            var avg = vals ? vals.reduce(function (a, b) { return a + b; }, 0) / vals.length : 0;
+            result.push({ d: names[dayIdx], v: parseFloat(avg.toFixed(2)) });
           }
-          return base;
+          return result;
         })();
 
         var tabs = [{ id: "home", icon: "Eye", label: "Monitor" }, { id: "dashboard", icon: "BarChart2", label: "Dashboard" }, { id: "settings", icon: "Settings", label: "Settings" }];
@@ -1746,7 +2017,7 @@
               screen === "home"
                 ? e(HomeScreen, { onNav: setScreen, session: session, live: live, isServiceActive: svcActive, totalReelsAll: totalReelsAll })
                 : screen === "dashboard"
-                  ? e(DashboardScreen, { session: session, reelsData: reelsData, days14: days14, circadian: rawData.circadian || [], totalReelsAll: totalReelsAll, avgNReels: avgNReels })
+                  ? e(DashboardScreen, { session: session, reelsData: reelsData, days14: days14, circadian: rawData.circadian || [], totalReelsAll: totalReelsAll, avgNReels: avgNReels, featureWeights: rawData.feature_weights, scorerComponentWeights: rawData.scorer_component_weights || null })
                   : e(SettingsScreen, { onNav: setScreen })
             ),
             /* Tab bar */
@@ -1777,7 +2048,7 @@
       };
 
       var root = ReactDOM.createRoot(document.getElementById("root"));
-      root.render(e(ReeliApp, null));
+      root.render(e(AppErrorBoundary, null, e(ReeliApp, null)));
     })();
   </script>
 </body>

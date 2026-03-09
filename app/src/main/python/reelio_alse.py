@@ -24,6 +24,13 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 
+DOOM_PROBABILITY_THRESHOLD = 0.55    # single source of truth for all doom classification
+
+COMPONENT_NAMES = [
+    'session_length', 'exit_conflict', 'rapid_reentry', 
+    'scroll_automaticity', 'dwell_collapse', 'rewatch_compulsion', 'environment'
+]
+
 # NO scipy.linalg, hmmlearn, sklearn or scipy.stats ALLOWED
 from scipy.optimize import fmin_bfgs, minimize
 
@@ -59,7 +66,7 @@ DIMTEXT = colors.HexColor('#4a7a7a')
 WHITE   = colors.HexColor('#e0f0f0')
 AMBER   = colors.HexColor('#ffaa00')
 
-EXPECTED_SCHEMA_VERSION = 4
+EXPECTED_SCHEMA_VERSION = 5
 
 REQUIRED_COLUMNS = [
     "SessionNum", "ReelIndex", "StartTime", "EndTime", "DwellTime", "TimePeriod",
@@ -85,7 +92,8 @@ REQUIRED_COLUMNS = [
     "UniqueAudioCount", "RepeatContentFlag", "ContentRepeatRate",
     "CircadianPhase", "SleepProxyScore", "EstimatedSleepDurationH", "ConsistencyScore", "IsWeekend",
     "PostSessionRating", "IntendedAction", "ActualVsIntendedMatch", "RegretScore", "MoodBefore", "MoodAfter", "MoodDelta",
-    "SleepStart", "SleepEnd"
+    "SleepStart", "SleepEnd",
+    "PreviousContext", "DelayedRegretScore", "ComparativeRating", "MorningRestScore"
 ]
 
 class SchemaError(Exception):
@@ -110,6 +118,9 @@ def preprocess_session(df):
         'PostSessionRating': 0.0,
         'RegretScore': 0.0,
         'MoodDelta': 0.0,
+        # NOTE: TimeSinceLastSessionMin = 0 means "gap not tracked by Kotlin" (session end time not
+        # persisted), NOT "instant re-entry". The DoomScorer.score() gap_min == 0 branch handles this.
+        # The default 60.0 below only fires when the COLUMN is entirely absent (schema upgrade path).
         'TimeSinceLastSessionMin': 60.0,
         'DayOfWeek': 0.0,
         'StartTime': '2026-01-01T12:00:00Z',
@@ -123,7 +134,7 @@ def preprocess_session(df):
     if 'log_dwell' not in df.columns:
         df['log_dwell'] = np.log(np.maximum(df['DwellTime'] if 'DwellTime' in df.columns else 1.0, 1e-3))
     if 'log_speed' not in df.columns:
-        df['log_speed'] = np.log(np.maximum(df['AvgScrollSpeed'] if 'AvgScrollSpeed' in df.columns else 1.0, 1e-3))
+        df['log_speed'] = np.log(np.maximum(df['AvgScrollSpeed'] if 'AvgScrollSpeed' in df.columns else 1.0, 1.0))
     if 'rhythm_dissociation' not in df.columns:
         df['rhythm_dissociation'] = df['ScrollRhythmEntropy']
     if 'rewatch_flag' not in df.columns:
@@ -132,6 +143,31 @@ def preprocess_session(df):
         df['exit_flag'] = (df['AppExitAttempts'] > 0).astype(float)
     if 'swipe_incomplete' not in df.columns:
         df['swipe_incomplete'] = 1.0 - (df['SwipeCompletionRatio'] if 'SwipeCompletionRatio' in df.columns else 1.0)
+        
+    if 'supervised_doom' not in df.columns:
+        # Ground Truth Labeling Layer: Weighted blend of immediate and delayed signals
+        # Higher score = more evidence of a "Doom" state
+        imm = df['RegretScore'].iloc[0] / 5.0 if 'RegretScore' in df.columns else 0.0
+        # Delayed regret (1hr later) is more honest/accurate (hedonic decay)
+        del_reg = df['DelayedRegretScore'].iloc[0] / 5.0 if 'DelayedRegretScore' in df.columns else 0.0
+        # Better/Same/Worse comparison (Better=1, Worse=5)
+        comp = df['ComparativeRating'].iloc[0] / 5.0 if 'ComparativeRating' in df.columns else 0.0
+        
+        # Priority: Delayed Regret > Comparative > Immediate Regret
+        label_score = 0.0
+        if del_reg > 0:
+            label_score = 0.6 * del_reg + 0.4 * comp if comp > 0 else del_reg
+        elif comp > 0:
+            label_score = 0.7 * comp + 0.3 * imm
+        else:
+            label_score = imm
+        
+        # Intent-based boost: avoidance/boredom intent + completed session is a strong doom signal
+        intended = str(df['IntendedAction'].iloc[0]) if 'IntendedAction' in df.columns else ""
+        if intended in ("Stressed / Avoidance", "Bored / Nothing to do"):
+            label_score = min(1.0, label_score + 0.25)
+            
+        df['supervised_doom'] = float(np.clip(label_score, 0.0, 1.0))
         
     num_cols = df.select_dtypes(include=[np.number]).columns
     df[num_cols] = df[num_cols].fillna(0)
@@ -155,7 +191,7 @@ class UserBaseline:
         self.typical_gap_mu = 120.0
         self.exit_rate_baseline = 0.05
         self.rewatch_rate_base = 0.1
-        self.entropy_baseline = 1.0
+        self.entropy_baseline = 2.5
         self.n_sessions_seen = 0
         self.last_updated = datetime.now().isoformat()
 
@@ -207,10 +243,10 @@ class UserBaseline:
 
     def get_priors(self) -> dict:
         return {
-            'mu_prior_doom': self.dwell_mu_personal + 1.5 * self.dwell_sig_personal,
-            'mu_prior_casual': self.dwell_mu_personal - 0.5 * self.dwell_sig_personal,
-            'speed_mu_prior_doom': self.speed_mu_personal,
-            'speed_mu_prior_casual': self.speed_mu_personal + self.speed_sig_personal,
+            'mu_prior_doom':   self.dwell_mu_personal - 1.2 * self.dwell_sig_personal,
+            'mu_prior_casual': self.dwell_mu_personal + 0.4 * self.dwell_sig_personal,
+            'speed_mu_prior_doom':   self.speed_mu_personal + 0.5 * self.speed_sig_personal,
+            'speed_mu_prior_casual': self.speed_mu_personal,
             'exit_rate_prior': self.exit_rate_baseline,
             'rewatch_rate_prior': self.rewatch_rate_base
         }
@@ -295,7 +331,9 @@ class RegimeDetector:
             recent_hours[h] += 1
         recent_hours /= max(1, np.sum(recent_hours))
         
-        kl_hours = kl_divergence_categorical(recent_hours, baseline.typical_hour)
+        # Floor typical_hour at 1/48 (half of uniform) to prevent KL explosion on new hours
+        baseline_smoothed = np.maximum(baseline.typical_hour, 1/48)
+        kl_hours = kl_divergence_categorical(recent_hours, baseline_smoothed)
         
         crit_a = doom_7d > (doom_30d + 2.5 * doom_std_30d)
         crit_b = abs(dwell_7d_mu - baseline.dwell_mu_personal) > (2.0 * baseline.dwell_sig_personal)
@@ -327,12 +365,18 @@ class RegimeDetector:
         return obj
 
 class DoomScorer:
+    # IMPORTANT:
+    # Heuristic components explain HMM-derived doom (S_t).
+    # They must NOT override, amplify, or determine doom classification.
+    # S_t remains the sole source of doom state inference.
     """
     Pillar 9: Composite Doom Score.
     Model-free interpretable layer that runs in parallel with HMM.
     """
     def __init__(self, thresholds: dict = None):
-        self.thresholds = thresholds or {'DOOM': 0.55, 'BORDERLINE': 0.35}
+        self.thresholds = thresholds or {'DOOM': DOOM_PROBABILITY_THRESHOLD, 'BORDERLINE': 0.35}
+        self.component_weights = np.ones(7) / 7.0
+        self.n_updates = 0
 
     def score(self, session_df, baseline: UserBaseline, gap_min: float, prev_S_t: float = 0.0) -> dict:
         if len(session_df) == 0:
@@ -343,25 +387,31 @@ class DoomScorer:
         c_length = min(n_reels / max(1.0, baseline.session_len_mu + 2 * baseline.session_len_sig), 1.0)
         
         exit_sum = session_df['AppExitAttempts'].sum() / n_reels
-        c_volconst = min(exit_sum / max(0.01, baseline.exit_rate_baseline + 0.01), 1.0)
+        baseline_exit = max(baseline.exit_rate_baseline, 0.05)
+        c_volconst = 1.0 - np.exp(-exit_sum / (baseline_exit + 0.5))
+        c_volconst = float(np.clip(c_volconst, 0.0, 1.0))
         
-        if gap_min < 0:
+        if gap_min <= 0:
             c_rapid = 0.0
         elif gap_min < 3:
             c_rapid = 1.0
         elif gap_min < 7:
-            c_rapid = 0.7
+            c_rapid = 0.6
         elif gap_min < 15:
             c_rapid = 0.3
         else:
             c_rapid = 0.0
             
-        mean_entropy = session_df['ScrollRhythmEntropy'].mean()
-        raw_auto = 1.0 - (mean_entropy / max(0.01, baseline.entropy_baseline))
-        c_auto = np.clip(raw_auto, 0.0, 1.0)
+        # Use the latest entropy value (final state of session) instead of avg of historical states
+        final_entropy = session_df['ScrollRhythmEntropy'].iloc[-1] if 'ScrollRhythmEntropy' in session_df.columns else 0.0
+        # Rhythmic swiping (low entropy) indicates automaticity. 
+        # Entropy of 0.0 (perfect rhythm) = 1.0 Automaticity. Entropy >= 4.0 = 0.0 Automaticity.
+        c_auto = float(np.clip(1.0 - (final_entropy / 4.0), 0.0, 1.0))
         
-        trend = session_df['SessionDwellTrend'].mean() if 'SessionDwellTrend' in session_df else 0.0
-        c_collapse = np.clip(-trend * 10, 0.0, 1.0)
+        # Use latest trend value
+        trend_raw = session_df['SessionDwellTrend'].iloc[-1] if 'SessionDwellTrend' in session_df.columns else 0.0
+        trend = float(np.clip(trend_raw, -2.0, 2.0))
+        c_collapse = float(np.clip(-trend / 2.0, 0.0, 1.0))
         
         rewatch_sum = session_df['BackScrollCount'].sum() / n_reels
         c_rewatch = min(rewatch_sum / max(0.01, baseline.rewatch_rate_base + 0.01), 1.0)
@@ -370,8 +420,8 @@ class DoomScorer:
         chrge = session_df['IsCharging'].iloc[0] if 'IsCharging' in session_df else 0
         phase = session_df['CircadianPhase'].iloc[0] if 'CircadianPhase' in session_df else 0.5
         
-        sleep_start = int(session_df['SleepStart'].iloc[0]) if 'SleepStart' in session_df.columns else 23
-        sleep_end   = int(session_df['SleepEnd'].iloc[0])   if 'SleepEnd'   in session_df.columns else 7
+        sleep_start = int(session_df['SleepStart'].iloc[0]) if 'SleepStart' in session_df.columns else 1
+        sleep_end   = int(session_df['SleepEnd'].iloc[0])   if 'SleepEnd'   in session_df.columns else 8
 
         try:
             hour = pd.to_datetime(session_df['StartTime'].iloc[0]).hour
@@ -385,48 +435,91 @@ class DoomScorer:
 
         is_dark_rm = 1.0 if (lux < 15 and (phase > 0.75 or phase < 0.25)) else 0.0
         sleep_penalty = 1.0 if in_sleep_window else 0.0
-        c_env = 0.25 * is_dark_rm + 0.25 * float(chrge) + 0.10 * float(lux < 5) + 0.40 * sleep_penalty
-        
-        ds = (
-            0.25 * c_length +
-            0.20 * c_volconst +
-            0.15 * c_rapid +
-            0.15 * c_auto +
-            0.10 * c_collapse +
-            0.10 * c_rewatch +
-            0.05 * c_env
+        c_env_base = (
+            0.15 * is_dark_rm +
+            0.15 * float(chrge) +
+            0.10 * float(lux < 5) +
+            0.30 * sleep_penalty
         )
+        # Environment risk is absolute, not conditioned on previous state.
+        # Late night scrolling in a dark room is RISKY regardless of if you were casual 10 mins ago.
+        c_env = float(np.clip(c_env_base, 0.0, 1.0))
+        
+        w = self.component_weights
+        c_vec = np.array([
+            c_length, c_volconst, c_rapid,
+            c_auto, c_collapse, c_rewatch, c_env
+        ])
+        ds = float(np.dot(w, c_vec))
         
         # FIX (Bug 9): additive amplifiers, not multiplicative chain
-        post_rating = session_df['PostSessionRating'].iloc[0] if 'PostSessionRating' in session_df else 0
-        regret = session_df['RegretScore'].iloc[0] if 'RegretScore' in session_df else 0
-        mood_delta = session_df['MoodDelta'].iloc[0] if 'MoodDelta' in session_df else 0
-        
+        post_rating        = session_df['PostSessionRating'].iloc[0]    if 'PostSessionRating'    in session_df else 0
+        regret             = session_df['RegretScore'].iloc[0]           if 'RegretScore'          in session_df else 0
+        focus_after        = session_df['MoodAfter'].iloc[0]             if 'MoodAfter'            in session_df else 0
+        actual_vs_intended = session_df['ActualVsIntendedMatch'].iloc[0] if 'ActualVsIntendedMatch' in session_df else 2
+
         amp = 0.0
-        if (post_rating > 0 and post_rating < 3) or regret == 1:
+        if (post_rating > 0 and post_rating < 3) or regret >= 3:
             amp += 0.20
-        if mood_delta < -1:
+        if focus_after > 0 and focus_after <= 2:   # "Can't focus" or "Scattered"
             amp += 0.15
+        if actual_vs_intended == 0:                 # confirmed intent mismatch
+            amp += 0.10
         ds = np.clip(ds * (1.0 + amp), 0.0, 1.0)
             
         label = 'DOOM' if ds >= self.thresholds['DOOM'] else 'BORDERLINE' if ds >= self.thresholds['BORDERLINE'] else 'CASUAL'
         
-        comps = {
-            'length': c_length,
-            'volitional_conflict': c_volconst,
-            'rapid_reentry': c_rapid,
-            'automaticity': c_auto,
-            'dwell_collapse': c_collapse,
-            'rewatch': c_rewatch,
-            'environment': c_env
+        components = {
+            'session_length': float(c_length),
+            'exit_conflict': float(c_volconst),
+            'rapid_reentry': float(c_rapid),
+            'scroll_automaticity': float(c_auto),
+            'dwell_collapse': float(c_collapse),
+            'rewatch_compulsion': float(c_rewatch),
+            'environment': float(c_env),
         }
+
+        total = sum(max(v, 0.0) for v in components.values())
+        if total > 0:
+            components = {k: v / total for k, v in components.items()}
+        else:
+            components = {k: 0.0 for k in components}
         
         return {
             'doom_score': ds,
             'label': label,
-            'components': comps
+            'components': components
         }
     
+    def update_weights(self, components: dict, hmm_doom_prob: float):
+        """
+        Use HMM gamma as soft supervision to align component weights
+        with what actually predicts doom for this specific user.
+        No external labels needed - HMM doom probability is the target.
+        """
+        c_vec = np.array([
+            components.get('session_length',      0.0),
+            components.get('exit_conflict',        0.0),
+            components.get('rapid_reentry',        0.0),
+            components.get('scroll_automaticity',  0.0),
+            components.get('dwell_collapse',       0.0),
+            components.get('rewatch_compulsion',   0.0),
+            components.get('environment',          0.0),
+        ])
+
+        logit = np.dot(self.component_weights, c_vec)
+        y_hat = 1.0 / (1.0 + np.exp(-np.clip(logit, -10, 10)))
+
+        error = y_hat - hmm_doom_prob
+        lr = 0.05 * (0.97 ** self.n_updates)
+        grad = error * c_vec
+
+        self.component_weights -= lr * grad
+        self.component_weights = np.clip(self.component_weights, 0.01, None)
+        self.component_weights /= self.component_weights.sum()
+
+        self.n_updates += 1
+
 class ReelioCLSE:
     def __init__(self):
         self.SS_recent = self._empty_bank()
@@ -450,13 +543,21 @@ class ReelioCLSE:
         self.p_bern = np.full((self.num_features, 2), 0.5)
         self.rho_dwell_speed = np.zeros(2)
         
-        self.logistic_weights = np.array([0.0, 0.5, 0.3, 0.2, 0.8, 0.6, 0.0])
+        self.logistic_weights = np.array([0.0, 0.5, 0.3, 0.2, 0.8, 0.6, 0.0, 0.9, 0.7])
+        # Index 7 = stress/avoidance intent flag (prior 0.9: highest-risk pre-session state)
+        # Index 8 = low pre-session mood risk (prior 0.7: strong but below explicit intent)
+        # _update_contextual_prior() will pull these toward each user's actual pattern over sessions.
         
         self.n_sessions_seen = 0
         self.n_regime_alerts = 0
         self.labeled_sessions = 0
         self.session_ll_history = []
         self._checkpoint_dict = {}
+
+        self.running_disagreement = 0.0
+        self.disagreement_decay = 0.80
+        self.disagreement_lr = 0.05
+        self.max_disagreement_bias = 0.10
 
     def _empty_bank(self):
         return {
@@ -483,7 +584,11 @@ class ReelioCLSE:
         self.mu[2, :] = 0.5
         self.sigma[2, :] = 0.2
         self.p_bern[3, :] = priors['rewatch_rate_prior']
-        self.p_bern[4, :] = priors['exit_rate_prior']
+        
+        exit_p = priors['exit_rate_prior']
+        self.p_bern[4, 0] = np.clip(exit_p * 0.4, 0.01, 0.40)   # casual: few exit attempts
+        self.p_bern[4, 1] = np.clip(exit_p * 2.5, 0.15, 0.90)   # doom: many failed exit attempts
+        
         self.p_bern[5, :] = 0.5
         
         for bank in [self.SS_recent, self.SS_medium, self.SS_long]:
@@ -497,21 +602,26 @@ class ReelioCLSE:
             
     def _checkpoint(self):
         self._checkpoint_dict = {
-            'mu': self.mu.copy(),
-            'sigma': self.sigma.copy(),
-            'p_bern': self.p_bern.copy(),
-            'A': self.A.copy(),
-            'pi': self.pi.copy(),
-            'h': self.h.copy(),
-            'feature_weights': self.feature_weights.copy(),
-            'n_sessions_seen': self.n_sessions_seen,
-            'n_regime_alerts': self.n_regime_alerts,
-            'labeled_sessions': self.labeled_sessions
+            'mu': self.mu.tolist(),
+            'sigma': self.sigma.tolist(),
+            'p_bern': self.p_bern.tolist(),
+            'A': self.A.tolist(),
+            'pi': self.pi.tolist(),
+            'h': self.h.tolist(),
+            'feature_weights': self.feature_weights.tolist(),
+            'rho_dwell_speed': self.rho_dwell_speed.tolist(),
+            'logistic_weights': self.logistic_weights.tolist(),
+            'n_sessions_seen': int(self.n_sessions_seen),
+            'n_regime_alerts': int(self.n_regime_alerts),
+            'labeled_sessions': int(self.labeled_sessions),
+            'running_disagreement': float(self.running_disagreement),
+            'q_01': float(self.q_01),
+            'q_10': float(self.q_10),
         }
 
     def _rollback(self):
         # FIX (Bug 2): explicitly cast JSON-deserialized lists back to numpy arrays
-        ARRAY_KEYS = {'mu', 'sigma', 'A', 'pi', 'h', 'p_bern', 'feature_weights', 'rho_dwell_speed'}
+        ARRAY_KEYS = {'mu', 'sigma', 'A', 'pi', 'h', 'p_bern', 'feature_weights', 'rho_dwell_speed', 'logistic_weights'}
         for k, v in self._checkpoint_dict.items():
             if k in ARRAY_KEYS:
                 setattr(self, k, np.array(v))
@@ -701,14 +811,10 @@ class ReelioCLSE:
             path.insert(0, ptr[t, path[0]])
             
         gamma, _, _ = self._e_step(obs, A_first)
-        raw_doom_prob = np.mean(gamma[:, 1])
+        # Single source of truth for raw reporting
+        raw_mean_doom = float(np.mean(gamma[:, 1]))
         
-        alpha_conf = min(1.0, self.n_sessions_seen / 10.0)
-        p_prior = self._compute_contextual_pi(ctx)[1] if ctx is not None else self.pi[1]
-        
-        doom_prob = alpha_conf * raw_doom_prob + (1.0 - alpha_conf) * p_prior
-        
-        return path, doom_prob, gamma
+        return path, raw_mean_doom, gamma
 
     def compute_model_confidence(self) -> float:
         C_volume = min(self.n_sessions_seen / 20.0, 1.0)
@@ -718,30 +824,47 @@ class ReelioCLSE:
         sigma_avg = (self.sigma[0, 0] + self.sigma[0, 1]) / 2
 
         if sigma_avg > 0:
-            separation = (mu_doom - mu_casual) / sigma_avg
+            separation = (mu_casual - mu_doom) / sigma_avg
             C_separation = float(np.clip(separation / 2.0, 0.0, 1.0))
         else:
             C_separation = 0.0
 
         if self.n_sessions_seen > 0:
             alert_rate = self.n_regime_alerts / self.n_sessions_seen
-            C_stability = float(np.clip(1.0 - (alert_rate / 0.5), 0.0, 1.0))
+            C_stability = float(np.clip(1.0 - alert_rate, 0.0, 1.0))
         else:
-            C_stability = 0.0
+            C_stability = 1.0
 
-        confidence = (
-            0.50 * C_volume +
-            0.30 * C_separation +
-            0.20 * C_stability
-        )
+        # Pillar 7: Sparse Data Guard
+        return float(np.clip(C_volume * C_separation * C_stability, 0.0, 1.0))
 
-        if self.labeled_sessions == 0:
-            return float(min(confidence, 0.60))
-        elif self.labeled_sessions < 10:
-            cap = 0.60 + (self.labeled_sessions / 10.0) * 0.20
-            return float(min(confidence, cap))
-        else:
-            return float(min(confidence, 0.90))
+    def _compute_label_confidence(self, df: pd.DataFrame) -> float:
+        """
+        Calculates how much we trust the user-provided ground truth for this session.
+        Delayed regret + Comparative rating = High confidence.
+        Immediate regret only = Medium confidence.
+        """
+        has_delayed = df['DelayedRegretScore'].iloc[0] > 0 if 'DelayedRegretScore' in df.columns else False
+        has_comp = df['ComparativeRating'].iloc[0] != 0 if 'ComparativeRating' in df.columns else False
+        has_imm = df['RegretScore'].iloc[0] > 0 if 'RegretScore' in df.columns else False
+        
+        if has_delayed and has_comp: return 1.0
+        if has_delayed: return 0.85
+        if has_comp: return 0.70
+        if has_imm: return 0.50
+        return 0.0
+
+    def _compute_disagreement_bias(self, hmm_prob: float, supervised_prob: float, label_conf: float) -> float:
+        """
+        Calculates a bias term to pull the model toward user ground truth.
+        """
+        if label_conf <= 0: return 0.0
+        diff = supervised_prob - hmm_prob
+        # Only apply bias if there's a significant disagreement (> 10%)
+        if abs(diff) < 0.10: return 0.0
+        
+        bias = diff * label_conf * self.disagreement_lr
+        return float(np.clip(bias, -self.max_disagreement_bias, self.max_disagreement_bias))
 
     def _update_feature_weights(self):
         kl_divs = np.zeros(self.num_features)
@@ -793,13 +916,19 @@ class ReelioCLSE:
         self.q_10 += 0.05 * grad_10
 
     def _compute_contextual_pi(self, ctx: np.ndarray) -> np.ndarray:
-        if self.n_sessions_seen < 5:
-            return np.array([0.65, 0.35])
+        # Gradual activation instead of hard cutoff at session 5
+        pi_weight = min(1.0, self.n_sessions_seen / 5.0)
+        p_prior = np.array([0.65, 0.35])
+        
+        if pi_weight <= 0:
+            return p_prior
             
         logit = np.dot(self.logistic_weights, ctx)
         pi1 = 1.0 / (1.0 + np.exp(-np.clip(logit, -10, 10)))
         pi1 = np.clip(pi1, 0.1, 0.9)
-        return np.array([1 - pi1, pi1])
+        contextual_pi = np.array([1 - pi1, pi1])
+        
+        return pi_weight * contextual_pi + (1 - pi_weight) * p_prior
 
     def _update_contextual_prior(self, ctx: np.ndarray, gamma_t0: np.ndarray):
         if self.n_sessions_seen < 5:
@@ -919,6 +1048,22 @@ class ReelioCLSE:
         lux = df['AmbientLuxStart'].iloc[0] if 'AmbientLuxStart' in df else 50.0
         chrge = df['IsCharging'].iloc[0] if 'IsCharging' in df else 0
         
+        intended    = str(df['IntendedAction'].iloc[0]) if 'IntendedAction' in df.columns else ""
+        prev_ctx    = str(df['PreviousContext'].iloc[0]) if 'PreviousContext' in df.columns else ""
+        
+        # Pre-session Risk Flag: replaces old UsageStats logic (Work/Study) and captures intended avoidance
+        risk_indicators = [
+            intended == "Stressed / Avoidance",
+            intended == "Bored / Nothing to do",
+            prev_ctx == "Work / Study",
+            prev_ctx == "Boredom"
+        ]
+        stress_flag = 1.0 if any(risk_indicators) else 0.0
+
+        # Pre-session Mood Risk: low mood (1-2) = high risk, high mood (4-5) = low risk
+        mood_before_raw = float(df['MoodBefore'].iloc[0]) if 'MoodBefore' in df.columns else 3.0
+        mood_risk = (5.0 - mood_before_raw) / 4.0  # inverted: 1→1.0, 3→0.5, 5→0.0
+
         ctx = np.array([
             1.0,
             np.sin(phase * 2 * np.pi),
@@ -926,7 +1071,9 @@ class ReelioCLSE:
             gap_hr / 10.0,
             1.0 if lux < 10 else 0.0,
             1.0 if chrge else 0.0,
-            1.0 if day_of_week in (1, 7) else 0.0
+            1.0 if day_of_week in (1, 7) else 0.0,
+            stress_flag,                                 # index 7: pre-session stress/avoidance
+            mood_risk                                    # index 8: low pre-session mood
         ])
         
         A_first = self._a_gap(gap_hr)
@@ -935,20 +1082,52 @@ class ReelioCLSE:
         gamma, xi, ll = self._e_step(obs, A_first)
         self.session_ll_history.append(ll)
         
-        dominant_state = np.argmax(gamma.sum(axis=0))
-        reg_alert = regime_detector.update(np.mean(gamma[:, 1]), df, baseline)
+        # Dual probability computation
+        raw_mean_doom = float(np.mean(gamma[:, 1]))
+        
+        # Bayesian blending for internal learning stability
+        alpha_conf = min(1.0, self.n_sessions_seen / 10.0)
+        p_prior = self.pi[1]
+        blended_doom_prob = alpha_conf * raw_mean_doom + (1.0 - alpha_conf) * p_prior
+        
+        # --- Supervised Learning Layer ---
+        # blends raw HMM inference with user-reported ground truth (Regret, Comparative, Delayed)
+        supervised_doom = df['supervised_doom'].iloc[0] if 'supervised_doom' in df.columns else 0.0
+        label_conf = self._compute_label_confidence(df)
+        
+        if label_conf > 0:
+            self.labeled_sessions += 1
+            # Adjust running bias based on disagreement with ground truth
+            bias = self._compute_disagreement_bias(raw_mean_doom, supervised_doom, label_conf)
+            self.running_disagreement = float(np.clip(
+                self.running_disagreement * self.disagreement_decay + bias,
+                -0.25, 0.25
+            ))
+            
+            # Blend the HMM latent probability with user label for reported_doom
+            reported_blended_prob = (1 - label_conf) * raw_mean_doom + label_conf * supervised_doom
+        else:
+            # Decay bias if no label provided
+            self.running_disagreement = float(np.clip(
+                self.running_disagreement * self.disagreement_decay,
+                -0.25, 0.25
+            ))
+            reported_blended_prob = raw_mean_doom + self.running_disagreement
+            
+        reported_blended_prob = float(np.clip(reported_blended_prob, 0.0, 1.0))
+        
+        # Internal updates use the blended probability
+        reg_alert = regime_detector.update(reported_blended_prob, df, baseline)
         if reg_alert:
             self.n_regime_alerts += 1
             
-        post_rating = df['PostSessionRating'].iloc[0] if 'PostSessionRating' in df else 0
-        regret = df['RegretScore'].iloc[0] if 'RegretScore' in df else 0
-        if post_rating != 0 or regret != 0:
-            self.labeled_sessions += 1
-        
+        # Dominance determined using raw behavioral mean vs hard threshold
+        dominant_state = 1 if raw_mean_doom >= DOOM_PROBABILITY_THRESHOLD else 0
+            
         self._update_ss(gamma, xi, obs, dominant_state, len(df), reg_alert)
         self.n_sessions_seen += 1
         
-        baseline.update(df, np.mean(gamma[:, 1]), 0.95 if not reg_alert else 0.99)
+        baseline.update(df, reported_blended_prob, 0.95 if not reg_alert else 0.99)
         self._update_contextual_prior(ctx, gamma[0])
         
         if prev_gamma is not None:
@@ -957,27 +1136,26 @@ class ReelioCLSE:
         self._m_step(reg_alert)
         self._update_feature_weights()
         
-        path, d_prob, _ = self.decode(obs, A_first, ctx)
-        
-        return path, d_prob, gamma
+        # Final result uses reported_blended_prob for the score
+        return gamma, reported_blended_prob
 
 def validate_model(model: ReelioCLSE) -> list:
     errors = []
     
-    if model.mu[0, 1] <= model.mu[0, 0]:
-        errors.append("Validation Failed: Doom Dwell mu must be > Casual Dwell mu")
+    if model.mu[0, 1] >= model.mu[0, 0]:
+        errors.append("Validation Failed: Doom Dwell mu must be < Casual Dwell mu (doom = faster scrolling)")
 
     # FIX (Bug 10): removed arbitrary sigma ordering check — doom sigma > casual sigma
     # is not architecturally required; only doom MEAN must be higher
         
-    if model.mu[1, 1] >= model.mu[1, 0]:
-        errors.append("Validation Failed: Doom Speed mu must be < Casual Speed mu")
+    if model.mu[1, 1] <= model.mu[1, 0]:
+        errors.append("Validation Failed: Doom Speed mu must be > Casual Speed mu (faster velocity)")
         
     if model.p_bern[3, 1] <= model.p_bern[3, 0]:
         errors.append("Validation Failed: Doom Rewatch Rate must be > Casual Rewatch Rate")
         
-    if model.p_bern[4, 1] >= model.p_bern[4, 0]:
-        errors.append("Validation Failed: Doom Exit Rate must be < Casual Exit Rate")
+    if model.p_bern[4, 1] <= model.p_bern[4, 0]:
+        errors.append("Validation Failed: Doom Exit Attempt Rate must be > Casual (doom = more failed exits)")
         
     if model.q_10 >= model.q_01:
         errors.append("Validation Failed: q_10 (escape) must be < q_01 (pull)")
@@ -1009,6 +1187,14 @@ def load_full_state(state_path: str):
     model = ReelioCLSE()
     model._checkpoint_dict = data.get('model_state', {})
     model._rollback()
+
+    # Shape migration: saved models have 7-element logistic_weights before this patch.
+    # Without this guard, _compute_contextual_pi() crashes with a shape mismatch
+    # the first time a user with a saved model state runs a session after the update.
+    if hasattr(model, 'logistic_weights') and len(model.logistic_weights) == 7:
+        model.logistic_weights = np.append(model.logistic_weights, [0.9, 0.7])
+    elif hasattr(model, 'logistic_weights') and len(model.logistic_weights) == 8:
+        model.logistic_weights = np.append(model.logistic_weights, 0.7)
     
     if 'n_sessions_seen' not in model._checkpoint_dict:
         model.n_sessions_seen = data.get('model_state', {}).get('n_sessions_seen', 0)
@@ -1020,6 +1206,7 @@ def load_full_state(state_path: str):
     baseline = UserBaseline.from_dict(data.get('baseline_state', {}))
     
     detector = RegimeDetector()
+    scorer = DoomScorer()
     d_state = data.get('detector_state', {})
     detector.doom_history = d_state.get('doom_history', [])
     detector.dwell_history = d_state.get('dwell_history', [])
@@ -1028,57 +1215,150 @@ def load_full_state(state_path: str):
     detector.regime_alert = d_state.get('regime_alert', False)
     
     scorer = DoomScorer()
+    s_state = data.get('scorer_state', {})
+    if 'component_weights' in s_state:
+        scorer.component_weights = np.array(s_state['component_weights'])
+    if 'n_updates' in s_state:
+        scorer.n_updates = s_state['n_updates']
     
     prev_g = data.get('prev_gamma')
     prev_gamma = np.array(prev_g) if prev_g is not None else None
     
     return model, baseline, detector, scorer, prev_gamma
 
-def save_full_state(state_path: str, model, baseline, detector, prev_gamma):
-    model._checkpoint()
-    
-    data = {
-        'model_version': 3.0,
-        'model_state': model._checkpoint_dict,
-        'baseline_state': baseline.to_dict(),
-        'detector_state': {
-            'doom_history': detector.doom_history,
-            'dwell_history': detector.dwell_history,
-            'len_history': detector.len_history,
-            'hour_history': detector.hour_history,
-            'regime_alert': detector.regime_alert
-        },
-        'prev_gamma': prev_gamma.tolist() if prev_gamma is not None else None
-    }
-    with open(state_path, 'w') as f:
-        json.dump(data, f, default=lambda x: x.tolist() if isinstance(x, np.ndarray) else x)
+def _np_serial(x):
+    if isinstance(x, np.ndarray): return x.tolist()
+    if isinstance(x, np.integer): return int(x)
+    if isinstance(x, np.floating): return float(x)
+    raise TypeError(f"Not serializable: {type(x)}")
 
-def run_inference_on_latest(new_session_csv_path: str, model_state_path: str) -> dict:
-    with open(new_session_csv_path, 'r') as f:
-        first_line = f.readline().strip()
-        if first_line != f"SCHEMA_VERSION={EXPECTED_SCHEMA_VERSION}":
-            raise SchemaError(f"Expected SCHEMA_VERSION={EXPECTED_SCHEMA_VERSION}, got: {first_line}")
-        session_df = pd.read_csv(f)
+def save_full_state(state_path: str, model, baseline, detector, scorer, prev_gamma):
+    try:
+        model._checkpoint()
         
-    validate_csv_schema(session_df)
+        data = {
+            'model_version': 3.0,
+            'model_state': model._checkpoint_dict,
+            'baseline_state': baseline.to_dict(),
+            'detector_state': {
+                'doom_history': detector.doom_history,
+                'dwell_history': detector.dwell_history,
+                'len_history': detector.len_history,
+                'hour_history': detector.hour_history,
+                'regime_alert': detector.regime_alert
+            },
+            'scorer_state': {
+                'component_weights': scorer.component_weights.tolist(),
+                'n_updates': scorer.n_updates
+            },
+            'prev_gamma': prev_gamma.tolist() if prev_gamma is not None else None
+        }
+        with open(state_path, 'w') as f:
+            json.dump(data, f, default=_np_serial)
+        print(f"STATE_SAVED OK: {state_path}")
+    except Exception as e:
+        print(f"STATE_SAVE_FAILED: {e}")
+
+
+def apply_delayed_label(state_path: str, delayed_regret: int, comparative: int) -> str:
+    """
+    Called when delayed probe fires (~1hr post-session).
+    Updates running_disagreement with higher-confidence label
+    WITHOUT re-running the full HMM pipeline.
+    Returns JSON status string.
+    """
+    try:
+        model, baseline, detector, scorer, prev_gamma = load_full_state(state_path)
+        
+        # Recompute supervised_doom with delayed data
+        del_reg = delayed_regret / 5.0
+        comp = comparative / 5.0
+        if del_reg > 0:
+            supervised_doom = 0.6 * del_reg + 0.4 * comp if comp > 0 else del_reg
+        elif comp > 0:
+            supervised_doom = comp
+        else:
+            return json.dumps({"status": "no_update", "reason": "no delayed or comparative data"})
+        
+        # Label confidence is now much higher
+        label_conf = 1.0 if (del_reg > 0 and comp > 0) else 0.85
+        
+        # Last session's raw HMM doom is stored in detector history
+        if not detector.doom_history:
+            return json.dumps({"status": "no_update", "reason": "no doom history available"})
+        last_hmm_doom = detector.doom_history[-1]
+        
+        # Recalculate disagreement bias with the stronger label
+        bias = model._compute_disagreement_bias(last_hmm_doom, supervised_doom, label_conf)
+        model.running_disagreement = float(np.clip(
+            model.running_disagreement * model.disagreement_decay + bias,
+            -0.25, 0.25
+        ))
+        
+        
+        save_full_state(state_path, model, baseline, detector, scorer, prev_gamma)
+        print(f"DELAYED_LABEL_APPLIED: conf={label_conf} bias={bias:.4f} disagreement={model.running_disagreement:.4f}")
+        return json.dumps({"status": "updated", "label_conf": label_conf, "bias": float(bias)})
+    except Exception as e:
+        print(f"DELAYED_LABEL_FAILED: {e}")
+        return json.dumps({"status": "error", "message": str(e)})
+
+def run_inference_on_latest(csv_data: str, model_state_path: str, survey_data: dict = None) -> dict:
+    import io
+    if not csv_data:
+        return {"doom_score": 0.0, "doom_label": "UNINIT", "model_confidence": 0.0}
+        
+    f = io.StringIO(csv_data)
+    first_line = f.readline().strip()
+    if first_line != f"SCHEMA_VERSION={EXPECTED_SCHEMA_VERSION}":
+        raise SchemaError(f"Expected SCHEMA_VERSION={EXPECTED_SCHEMA_VERSION}, got: {first_line}")
+    full_df = pd.read_csv(f)
+        
+    validate_csv_schema(full_df)
+    
+    # Pillar 7: Multi-Session Contextualization
+    # Only process the LATEST session in the file.
+    full_df['_session_key'] = full_df.apply(make_session_key, axis=1)
+    session_list = sorted(
+        full_df.groupby('_session_key'),
+        key=lambda x: x[1]['StartTime'].iloc[0]
+    )
+    
+    if not session_list:
+        return {"doom_score": 0.0, "doom_label": "UNSCORED", "model_confidence": 0.0}
+        
+    latest_sess_id, session_df = session_list[-1]
+    session_df = preprocess_session(session_df)
     
     model, baseline, detector, scorer, prev_gamma = load_full_state(model_state_path)
-    session_df = preprocess_session(session_df)
     
     if len(session_df) < 2:
         return {"doom_score": 0.0, "doom_label": "UNSCORED", "model_confidence": 0.0}
         
-    path, doom_prob, gamma = model.process_session(session_df, baseline, detector, prev_gamma)
+    # Inject live survey data if provided for real-time amplification
+    if survey_data:
+        for k, v in survey_data.items():
+            if k in session_df.columns:
+                session_df.loc[:, k] = v
+        
+    gamma, blended_prob = model.process_session(session_df, baseline, detector, prev_gamma)
+    doom_prob = blended_prob
     
-    gap_hr = session_df['TimeSinceLastSessionMin'].iloc[0] / 60.0 if 'TimeSinceLastSessionMin' in session_df else 2.0
+    # Now that Kotlin passes high-precision timeSinceLastSessionMin, ensure we use it correctly
+    gap_min = float(session_df['TimeSinceLastSessionMin'].iloc[0]) if 'TimeSinceLastSessionMin' in session_df else 120.0
+    
     # FIX (Bug 8): save and use scorer result instead of discarding it
-    scorer_result = scorer.score(session_df, baseline, gap_hr)
+    scorer_result = scorer.score(session_df, baseline, gap_min, prev_S_t=blended_prob)
     
-    save_full_state(model_state_path, model, baseline, detector, gamma)
+    # Pillar 10: Dynamic Alignment. Weights evolve based on what is predicting the HMM doom state.
+    # Use blended probability for learning alignment
+    scorer.update_weights(scorer_result['components'], float(blended_prob))
+    
+    save_full_state(model_state_path, model, baseline, detector, scorer, gamma)
     
     confidence = float(model.compute_model_confidence())
-    # FIX (Bug 1): doom_prob is a scalar float, not an array — compare directly
-    label = "DOOMSCROLLING" if doom_prob > 0.65 else "CASUAL"
+    # S_t for dashboard uses raw continuous posterior mean
+    label = "DOOMSCROLLING" if doom_prob >= DOOM_PROBABILITY_THRESHOLD else "CASUAL"
     
     return {
         "doom_score": float(doom_prob),
@@ -1116,7 +1396,8 @@ def run_full_pipeline(csv_path: str, state_path: str = None) -> ReelioCLSE:
         if len(s_df) < 2:
             continue
             
-        path, doom_prob, gamma = model.process_session(s_df, baseline, detector, prev_gamma)
+        gamma, blended_prob = model.process_session(s_df, baseline, detector, prev_gamma)
+        doom_prob = blended_prob
         prev_gamma = gamma
         
         s_obj = scorer.score(s_df, baseline, s_df['TimeSinceLastSessionMin'].iloc[0] if 'TimeSinceLastSessionMin' in s_df else 60.0)
@@ -1133,7 +1414,7 @@ def run_full_pipeline(csv_path: str, state_path: str = None) -> ReelioCLSE:
     return model
 
 
-def run_dashboard_payload(csv_data: str, state_path: str = None) -> str:
+def run_dashboard_payload(csv_data: str, state_path: str = None, survey_data: dict = None) -> str:
     import io
 
     if not csv_data or not csv_data.strip():
@@ -1160,6 +1441,7 @@ def run_dashboard_payload(csv_data: str, state_path: str = None) -> str:
     model = ReelioCLSE()
     baseline = UserBaseline()
     detector = RegimeDetector()
+    scorer = DoomScorer()
     
     if 'SessionNum' not in df.columns:
         return json.dumps({"error": "Schema missing SessionNum", "sessions": []})
@@ -1169,25 +1451,49 @@ def run_dashboard_payload(csv_data: str, state_path: str = None) -> str:
         df.groupby('_session_key'),
         key=lambda x: x[1]['StartTime'].iloc[0]
     )
+
+    # Inject live survey data into the latest session if provided
+    if survey_data and session_list:
+        latest_sess_id, latest_df = session_list[-1]
+        for k, v in survey_data.items():
+            if k in df.columns:
+                latest_df.loc[:, k] = v
+        # Update back in the list
+        session_list[-1] = (latest_sess_id, latest_df)
+
     prev_gamma = None
     
     results = []
+    historical_agg = {name: 0.0 for name in COMPONENT_NAMES}
+    total_st_weight = 0.0
     p_capture_timeline = []
     session_circadian = []
-    
+
     for sess_id, s_df in session_list:
         try:
             s_df = preprocess_session(s_df.copy())
             if len(s_df) < 2:
                 continue
                 
-            path, doom_prob, gamma = model.process_session(s_df, baseline, detector, prev_gamma)
+            gamma, blended_prob = model.process_session(s_df, baseline, detector, prev_gamma)
+            doom_prob = blended_prob
             prev_gamma = gamma
             
-            mean_gamma_1 = float(np.mean(gamma[:, 1]))
-            doom_reel_fraction = float(np.mean(gamma[:, 1] > 0.5))
-            dom_state = 1 if doom_reel_fraction > 0.20 else 0
-            S_t_reported = doom_reel_fraction
+            # Dashboard score is the raw behavioral mean
+            S_t_reported = doom_prob
+
+            # Internal learning uses blended probability
+            gap_min = float(s_df['TimeSinceLastSessionMin'].iloc[0]) if 'TimeSinceLastSessionMin' in s_df.columns else 60.0
+            scorer_result = scorer.score(s_df, baseline, gap_min, prev_S_t=blended_prob)
+            scorer.update_weights(scorer_result['components'], blended_prob)
+            
+            # Historical Aggregation: Weight components by blended probability for stability
+            st_weight = max(blended_prob, 0.01)
+            for k, v in scorer_result.get('components', {}).items():
+                historical_agg[k] += v * st_weight
+            total_st_weight += st_weight
+
+            dom_state = 1 if S_t_reported >= DOOM_PROBABILITY_THRESHOLD else 0
             
             time_period = s_df['TimePeriod'].iloc[0] if 'TimePeriod' in s_df.columns else "Unknown"
             
@@ -1230,6 +1536,11 @@ def run_dashboard_payload(csv_data: str, state_path: str = None) -> str:
                 "date":                str(date_str),
                 "startTime":           (lambda col: (lambda ts: ts.strftime('%Y-%m-%dT%H:%M') if (ts is not None and not pd.isna(ts) and ts.year > 1901) else "Unknown")(pd.to_datetime(col, dayfirst=False, errors='coerce')) if 'StartTime' in s_df.columns and pd.notna(s_df['StartTime'].iloc[0]) else "Unknown")(s_df['StartTime'].iloc[0]) if 'StartTime' in s_df.columns else "Unknown",
                 "endTime":             end_time_str,
+                # Heuristic components for dashboard anatomy
+                "heuristic_score":      round(scorer_result.get('doom_score', 0.0), 4),
+                "heuristic_components": scorer_result.get('components', {}),
+                # Primary driver for this specific session
+                "session_top_driver":   max(scorer_result.get('components', {}), key=scorer_result.get('components', {}).get) if scorer_result.get('components') else "N/A",
                 # Interaction data — previously missing from payload entirely
                 "totalLikes":          total_likes,
                 "totalComments":       total_comments,
@@ -1245,11 +1556,19 @@ def run_dashboard_payload(csv_data: str, state_path: str = None) -> str:
                 hour = pd.to_datetime(s_df['StartTime'].iloc[0]).hour if 'StartTime' in s_df.columns else 12
             except:
                 hour = 12
-            session_circadian.append({'h': hour, 'doom': mean_gamma_1})
+            session_circadian.append({'h': hour, 'doom': S_t_reported})
             
         except Exception as e:
             continue
             
+    # Normalize Historical Drivers
+    if total_st_weight > 0:
+        historical_drivers = {k: round(v / total_st_weight, 4) for k, v in historical_agg.items()}
+    else:
+        historical_drivers = {k: 0.0 for k in historical_agg}
+    
+    top_historical_driver = max(historical_drivers, key=historical_drivers.get) if historical_drivers else "N/A"
+
     regime_stability = 1.0 / (1.0 - model.A[1, 1]) if (1.0 - model.A[1, 1]) > 1e-5 else 999.0
     
     df_circ = pd.DataFrame(session_circadian) if session_circadian else pd.DataFrame(columns=['h', 'doom'])
@@ -1258,13 +1577,19 @@ def run_dashboard_payload(csv_data: str, state_path: str = None) -> str:
     # instead of a hardcoded baseline that fabricates risk patterns
     personal_avg_doom = float(df_circ['doom'].mean()) if len(df_circ) > 0 else 0.5
 
+    # Bayesian Smoothing Strength (m): weight of the 'prior' global average in terms of session counts.
+    # An hour with only 1 session will be heavily pulled toward the average.
+    m = 3.0
+
     for h in range(0, 24, 2):
         mask = df_circ['h'].isin([h, h+1])
         if len(df_circ) > 0 and mask.any():
-            val = float(df_circ[mask]['doom'].mean())
+            subset = df_circ[mask]['doom']
+            # Bayesian Smoothing formula: (sum + m*prior) / (n + m)
+            val = (subset.sum() + m * personal_avg_doom) / (len(subset) + m)
         else:
             val = personal_avg_doom
-        circadian_map.append({'h': f"{h:02d}", 'doom': round(val, 2)})
+        circadian_map.append({'h': f"{h:02d}", 'doom': round(float(val), 2)})
         
     output_payload = {
         "model_parameters": {
@@ -1272,11 +1597,30 @@ def run_dashboard_payload(csv_data: str, state_path: str = None) -> str:
             "regime_stability_score": float(regime_stability)
         },
         "sessions": results,
+        "historical_drivers": historical_drivers,
+        "top_historical_driver": top_historical_driver,
         "timeline": {
             "p_capture": p_capture_timeline
         },
         "circadian": circadian_map,
-        "model_confidence": float(model.compute_model_confidence())
+        "model_confidence": float(model.compute_model_confidence()),
+        "feature_weights": {
+            "log_dwell":           float(model.feature_weights[0]),
+            "log_speed":           float(model.feature_weights[1]),
+            "rhythm_dissociation": float(model.feature_weights[2]),
+            "rewatch_flag":        float(model.feature_weights[3]),
+            "exit_flag":           float(model.feature_weights[4]),
+            "swipe_incomplete":    float(model.feature_weights[5]),
+        },
+        "scorer_component_weights": {
+            "session_length":      float(scorer.component_weights[0]),
+            "exit_conflict":       float(scorer.component_weights[1]),
+            "rapid_reentry":       float(scorer.component_weights[2]),
+            "scroll_automaticity": float(scorer.component_weights[3]),
+            "dwell_collapse":      float(scorer.component_weights[4]),
+            "rewatch_compulsion":  float(scorer.component_weights[5]),
+            "environment":         float(scorer.component_weights[6]),
+        }
     }
     return json.dumps(output_payload)
 
@@ -1374,6 +1718,9 @@ def run_report_payload(json_data: str, csv_data: str = "") -> str:
         A_mat = payload.get("model_parameters", {}).get("transition_matrix", [[0.8,0.2],[0.2,0.8]])
         model_confidence = float(payload.get("model_confidence", 0.5))
         circadian_data = payload.get("circadian", [])
+        # Safeguard: ensure we don't crash if these are missing
+        historical_drivers = payload.get("historical_drivers", {})
+        timeline_data = payload.get("timeline", {}).get("p_capture", [])
 
         # ── Cache hit check ──
         global _report_cache, _report_session_count
@@ -1409,8 +1756,6 @@ def run_report_payload(json_data: str, csv_data: str = "") -> str:
         total_saves = sum(s.get("totalSaves", 0) for s in sessions)
         passive_sessions = sum(1 for s in sessions if (s.get("totalLikes",0)+s.get("totalComments",0)+s.get("totalShares",0)+s.get("totalSaves",0)) == 0)
 
-        component_names = ['Session Length', 'Exit Conflict', 'Rapid Reentry',
-                           'Scroll Automaticity', 'Dwell Collapse', 'Rewatch Compulsion', 'Environment']
 
         for idx_s, s in enumerate(sessions):
             st = float(s.get("S_t", 0))
@@ -1427,23 +1772,11 @@ def run_report_payload(json_data: str, csv_data: str = "") -> str:
                 except:
                     time_str = 'N/A'
                     d_str = 'N/A'
-                # Bug 5 — TOP DRIVER proxy from JSON fields
-                try:
-                    n_r = s.get("nReels", 1)
-                    avg_d = float(s.get("avgDwell", s.get("meanDwell", 5.0)))
-                    st_val = float(s.get("S_t", 0))
-                    component_values = [
-                        min(n_r / 30.0, 1.0),                       # Session Length
-                        min(st_val * 1.5, 1.0),                      # Doom Intensity proxy
-                        0.3 if (avg_d < 2.0) else 0.0,              # Rapid Re-entry (low dwell = short gap)
-                        max(0.0, 1.0 - (avg_d / 8.0)),              # Scroll Automaticity
-                        max(0.0, 1.0 - (avg_d / 12.0)),             # Dwell Collapse
-                        0.0, 0.0
-                    ]
-                    top_driver_idx = int(np.argmax(component_values))
-                    top_driver = component_names[top_driver_idx] if max(component_values) > 0.1 else "Session Length"
-                except:
-                    top_driver = 'N/A'
+                # Use the pre-calculated top driver from the payload
+                top_driver = s.get("session_top_driver", "Session Length")
+                if isinstance(top_driver, str):
+                    top_driver = top_driver.replace('_', ' ').title()
+
                 doom_details.append([d_str, time_str, str(s.get("nReels", 0)),
                                       f"{s.get('avgDwell', s.get('meanDwell', 0)):.1f}s",
                                       top_driver, f"{st:.2f}"])
@@ -1602,34 +1935,46 @@ def run_report_payload(json_data: str, csv_data: str = "") -> str:
                                   fontName='Courier', fontSize=9, fillColor=DIMTEXT, textAnchor='middle'))
         elements.append(spark_draw)
 
-        # Trend callout
-        try:
-            if len(rolling5) >= 6:
-                early_avg = sum(rolling5[:len(rolling5)//2]) / max(1, len(rolling5)//2)
-                late_avg  = sum(rolling5[len(rolling5)//2:]) / max(1, len(rolling5) - len(rolling5)//2)
-                pct_change = (late_avg - early_avg) / max(0.01, early_avg) * 100
-                if pct_change < -5:
-                    trend_label = f"↓ IMPROVING — down {abs(pct_change):.0f}% over the monitored period"
-                    t_color = '#00e0e0'
-                elif pct_change > 5:
-                    trend_label = f"↑ WORSENING — up {pct_change:.0f}% over the monitored period"
-                    t_color = '#ff0055'
-                else:
-                    trend_label = f"→ STABLE — less than 5% change over the monitored period"
-                    t_color = '#ffaa00'
-                trend_box = Drawing(PW, 40)
-                trend_box.add(Rect(0, 5, PW, 30, rx=5, ry=5, fillColor=DARK2, strokeColor=colors.HexColor(t_color), strokeWidth=1.5))
-                trend_box.add(String(PW/2, 17, f"TREND: {trend_label}", fontName='Courier-Bold',
-                                     fontSize=9, fillColor=colors.HexColor(t_color), textAnchor='middle'))
-                elements.append(trend_box)
-        except:
-            pass
+        # Core Behavioral Vulnerabilities (Historical)
+        elements.append(Spacer(1, 5*mm))
+        elements.append(_section_header("CORE BEHAVIORAL VULNERABILITIES"))
+        elements.append(_get_explanation_box(
+            "This profile is derived by aggregating your behavior across all monitored sessions, weighting drivers "
+            "by the intensity of the resulting doom state. It reveals your primary long-term triggers."
+        ))
+
+        hist_drivers = payload.get("historical_drivers", {})
+        if hist_drivers:
+            d_hist = Drawing(PW, 160)
+            sorted_drivers = sorted(hist_drivers.items(), key=lambda x: x[1], reverse=True)
+            
+            bar_h = 15
+            gap = 5
+            max_bar_w = PW - 160
+            
+            for idx, (dname, dval) in enumerate(sorted_drivers):
+                y_pos = 140 - idx * (bar_h + gap)
+                # Label
+                disp_name = dname.replace('_', ' ').title()
+                d_hist.add(String(10, y_pos + 4, disp_name, fontName='Courier', fontSize=9, fillColor=WHITE))
+                # Bar background
+                d_hist.add(Rect(140, y_pos, max_bar_w, bar_h, fillColor=DARK2, strokeColor=GRAY, strokeWidth=0.5))
+                # Bar foreground
+                bar_w = dval * max_bar_w
+                col = MAGENTA if dval > 0.25 else AMBER if dval > 0.15 else CYAN
+                d_hist.add(Rect(140, y_pos, bar_w, bar_h, fillColor=col, strokeColor=None))
+                # Value label
+                d_hist.add(String(140 + bar_w + 5, y_pos + 4, f"{dval*100:.1f}%", fontName='Courier-Bold', fontSize=8, fillColor=col))
+            
+            elements.append(d_hist)
+        else:
+            elements.append(Paragraph("Insufficient data for historical profile.", BODY_STYLE))
 
         # Also show the capped doom table for reference
         elements.append(Spacer(1, 5*mm))
         elements.append(_section_header("DOOM SESSION LOG"))
         doom_details_capped = doom_details[-10:] if len(doom_details) > 10 else doom_details
-        t_data = [["DATE", "TIME", "REELS", "AVG DWELL", "TOP DRIVER", "S_t"]] + doom_details_capped
+        t_data = [["DATE", "TIME", "REELS", "AVG DWELL", "SESSION DRIVER", "S_t"]] + doom_details_capped
         ts = TableStyle([
             ('BACKGROUND',   (0,0), (-1,0), CYAN),
             ('TEXTCOLOR',    (0,0), (-1,0), DARK),

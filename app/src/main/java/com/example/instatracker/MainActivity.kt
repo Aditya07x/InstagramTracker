@@ -48,6 +48,11 @@ class MainActivity : ComponentActivity() {
         }
 
         webView = WebView(this)
+        webView.setBackgroundColor(android.graphics.Color.parseColor("#05050A")) // Match index.html bg
+        webView.layoutParams = android.view.ViewGroup.LayoutParams(
+            android.view.ViewGroup.LayoutParams.MATCH_PARENT, 
+            android.view.ViewGroup.LayoutParams.MATCH_PARENT
+        )
         setContentView(webView)
 
         // Configure WebView
@@ -74,7 +79,13 @@ class MainActivity : ComponentActivity() {
         webView.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
+                Log.d("ReactDashboard", "Page finished loading: $url")
                 injectDataWithDebounce(webView)
+            }
+
+            override fun onReceivedError(view: WebView?, request: android.webkit.WebResourceRequest?, error: android.webkit.WebResourceError?) {
+                super.onReceivedError(view, request, error)
+                Log.e("ReactDashboard", "WebView Error: ${error?.description}")
             }
         }
 
@@ -87,7 +98,7 @@ class MainActivity : ComponentActivity() {
         if (::webView.isInitialized) {
             // Re-trigger update in case permissions changed while app was configured in settings
             val isEnabled = isAccessibilityServiceEnabled()
-            val jsCode = "javascript:if(window.updateServiceStatus) window.updateServiceStatus($isEnabled);"
+            val jsCode = "if(window.updateServiceStatus) window.updateServiceStatus($isEnabled);"
             webView.evaluateJavascript(jsCode, null)
 
             // Instant transition: inject cached JSON immediately if available
@@ -99,14 +110,29 @@ class MainActivity : ComponentActivity() {
                         cachedJson.toByteArray(Charsets.UTF_8),
                         android.util.Base64.NO_WRAP
                     )
-                    webView.evaluateJavascript("injectDataB64('$b64');", null)
-                    Log.d("ReactDashboard", "Cached data injected instantly")
+                    injectWhenReady(webView, b64)
+                    Log.d("ReactDashboard", "Cached data injection triggered via polling")
                 } catch (e: Exception) {
                     Log.w("ReactDashboard", "Cache inject failed: ${e.message}")
                 }
             }
 
-            // Background refresh with latest data
+            // Ensure we aren't showing a blank page if it failed to load earlier
+            if (webView.url == null || webView.url == "about:blank") {
+                Log.w("ReactDashboard", "WebView URL is null or blank on resume, reloading...")
+                webView.loadUrl("file:///android_asset/www/index.html")
+            } else {
+                // Background refresh with latest data
+                injectDataWithDebounce(webView)
+            }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        Log.d("ReactDashboard", "onNewIntent called")
+        if (::webView.isInitialized) {
             injectDataWithDebounce(webView)
         }
     }
@@ -131,7 +157,6 @@ class MainActivity : ComponentActivity() {
                     } else {
                         handler.post {
                             injectErrorToReact(webView, "No data file found. Please scroll some reels first!")
-                            isProcessing = false
                         }
                         return@execute
                     }
@@ -139,33 +164,36 @@ class MainActivity : ComponentActivity() {
                     if (csvContent.isEmpty()) {
                         handler.post {
                             injectErrorToReact(webView, "No data available yet. Scroll a few more reels!")
-                            isProcessing = false
                         }
                         return@execute
                     }
 
-                    if (!Python.isStarted()) {
-                        Python.start(AndroidPlatform(this@MainActivity))
-                    }
-                    
                     var jsonContent = "{}"
-                    try {
-                        val py = Python.getInstance()
-                        val alseModule = py.getModule("reelio_alse")
-                        jsonContent = alseModule.callAttr("run_dashboard_payload", csvContent).toString()
-                    } catch (e: Exception) {
-                        Log.e("ReactDashboard", "Python Error: ${e.message}", e)
-                        handler.post {
-                            injectErrorToReact(webView, "Processing error: ${e.message}")
-                            isProcessing = false
+                    val mainLockWait1 = System.currentTimeMillis()
+                    android.util.Log.i("ReelioDiag", "MainActivity awaiting PYTHON_LOCK (dashboard_payload). time=$mainLockWait1")
+                    synchronized(InstaAccessibilityService.GLOBAL_PYTHON_LOCK) {
+                        android.util.Log.i("ReelioDiag", "MainActivity acquired PYTHON_LOCK (dashboard_payload). waited=${System.currentTimeMillis() - mainLockWait1}ms")
+                        try {
+                            if (!Python.isStarted()) {
+                                Python.start(AndroidPlatform(this@MainActivity))
+                            }
+                            val py = Python.getInstance()
+                            val alseModule = py.getModule("reelio_alse")
+                            jsonContent = alseModule.callAttr("run_dashboard_payload", csvContent).toString()
+                        } catch (e: Exception) {
+                            Log.e("ReactDashboard", "Python Error: ${e.message}", e)
+                            handler.post {
+                                injectErrorToReact(webView, "Processing error: ${e.message}")
+                            }
+                            return@execute
+                        } finally {
+                            android.util.Log.i("ReelioDiag", "MainActivity releasing PYTHON_LOCK (dashboard_payload). time=${System.currentTimeMillis()}")
                         }
-                        return@execute
                     }
 
                     if (jsonContent.isEmpty() || jsonContent == "{}" || jsonContent == "null") {
                         handler.post {
                             injectErrorToReact(webView, "No sufficient data yet. Scroll a few more reels!")
-                            isProcessing = false
                         }
                         return@execute
                     }
@@ -179,28 +207,33 @@ class MainActivity : ComponentActivity() {
                      )
 
                      handler.post {
-                         try {
-                             val jsCode = "injectDataB64('$b64Json');"
-                             webView.evaluateJavascript(jsCode, null)
-                            Log.d("ReactDashboard", "Data injected successfully")
-                        } catch (e: Exception) {
-                            Log.e("ReactDashboard", "JS Evaluation Error: ${e.message}", e)
-                            injectErrorToReact(webView, "Failed to render dashboard: ${e.message}")
-                        } finally {
-                            isProcessing = false
-                        }
-                    }
+                         injectWhenReady(webView, b64Json)
+                     }
                 } catch (e: Exception) {
                     Log.e("ReactDashboard", "Unexpected error in executor: ${e.message}", e)
                     handler.post {
                         injectErrorToReact(webView, "Unexpected error: ${e.message}")
-                        isProcessing = false
                     }
+                } finally {
+                    isProcessing = false
                 }
             }
         }
         
         handler.postDelayed(injectionRunnable!!, 100)
+    }
+
+    private fun injectWhenReady(webView: WebView, b64: String, attemptsLeft: Int = 20) {
+        webView.evaluateJavascript("typeof injectDataB64 === 'function'") { result ->
+            if (result == "true") {
+                webView.evaluateJavascript("injectDataB64('$b64');", null)
+                Log.d("ReactDashboard", "Data injected successfully via polling")
+            } else if (attemptsLeft > 0) {
+                handler.postDelayed({ injectWhenReady(webView, b64, attemptsLeft - 1) }, 150)
+            } else {
+                injectErrorToReact(webView, "Dashboard failed to initialise")
+            }
+        }
     }
 
     private fun injectErrorToReact(webView: WebView, errorMsg: String) {
@@ -331,12 +364,20 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                         if (!Python.isStarted()) Python.start(AndroidPlatform(mContext))
-                        val py = Python.getInstance()
-                        val alseModule = py.getModule("reelio_alse")
-                        // Pass both json and csv — csv needed for dates, times, top driver
-                        val csvFile = File(filesDir, "insta_data.csv")
-                        val csvContent = if (csvFile.exists()) csvFile.readText() else ""
-                        alseModule.callAttr("run_report_payload", jsonContent, csvContent).toString()
+                        
+                        val mainLockWait2 = System.currentTimeMillis()
+                        android.util.Log.i("ReelioDiag", "MainActivity awaiting PYTHON_LOCK (report_payload). time=$mainLockWait2")
+                        synchronized(InstaAccessibilityService.GLOBAL_PYTHON_LOCK) {
+                            android.util.Log.i("ReelioDiag", "MainActivity acquired PYTHON_LOCK (report_payload). waited=${System.currentTimeMillis() - mainLockWait2}ms")
+                            val py = Python.getInstance()
+                            val alseModule = py.getModule("reelio_alse")
+                            // Pass both json and csv — csv needed for dates, times, top driver
+                            val csvFile = File(filesDir, "insta_data.csv")
+                            val csvContent = if (csvFile.exists()) csvFile.readText() else ""
+                            val result = alseModule.callAttr("run_report_payload", jsonContent, csvContent).toString()
+                            android.util.Log.i("ReelioDiag", "MainActivity releasing PYTHON_LOCK (report_payload). time=${System.currentTimeMillis()}")
+                            result
+                        }
                     } catch (e: Exception) {
                         "{\"error\": \"${e.message}\"}"
                     }

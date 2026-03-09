@@ -13,6 +13,7 @@ import android.widget.TextView
 class IntentionProbeActivity : Activity() {
 
     private var moodBefore = 0
+    private var previousContext = "unknown"
     private var intendedAction = ""
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -31,7 +32,7 @@ class IntentionProbeActivity : Activity() {
         val layout = SurveyUIUtils.createMainLayout(this)
 
         layout.addView(SurveyUIUtils.createSystemLabel(this))
-        layout.addView(SurveyUIUtils.createStepIndicator(this, totalSteps = 2, currentStep = 1))
+        layout.addView(SurveyUIUtils.createStepIndicator(this, totalSteps = 3, currentStep = 1))
         layout.addView(SurveyUIUtils.createBadge(this, "PRE-SESSION  ·  MOOD CHECK", "#0DDFF2"))
         layout.addView(SurveyUIUtils.createTitleView(this, "How are you feeling?"))
         layout.addView(SurveyUIUtils.createSubtitle(this, "RATE YOUR CURRENT MOOD"))
@@ -44,12 +45,51 @@ class IntentionProbeActivity : Activity() {
             sublabels = listOf("Low", "", "Neutral", "", "High")
         ) { rating ->
             moodBefore = rating
-            showIntentionPrompt()
+            showContextPrompt()
         }
         layout.addView(moodRow)
 
         layout.addView(SurveyUIUtils.createSkipButton(this) {
             moodBefore = 0
+            showContextPrompt()
+        })
+
+        scroll.addView(layout)
+        setContentView(scroll)
+    }
+
+    // ── Step 2: Previous Context ─────────────────────────────────────────────
+    private fun showContextPrompt() {
+        val scroll = SurveyUIUtils.createScrollRoot(this)
+        val layout = SurveyUIUtils.createMainLayout(this)
+
+        layout.addView(SurveyUIUtils.createSystemLabel(this))
+        layout.addView(SurveyUIUtils.createStepIndicator(this, totalSteps = 3, currentStep = 2))
+        layout.addView(SurveyUIUtils.createBadge(this, "PRE-SESSION  ·  CONTEXT", "#0DDFF2"))
+        layout.addView(SurveyUIUtils.createTitleView(this, "What were you just doing?"))
+        layout.addView(SurveyUIUtils.createSubtitle(this, "REPLACES UNRELIABLE USAGESTATS DETECTION"))
+        layout.addView(SurveyUIUtils.createDivider(this))
+
+        val contexts = listOf(
+            Triple("Work / Study", "💼", "#0DDFF2"),
+            Triple("Socializing",  "💬", "#BF5AF2"),
+            Triple("Relaxing",     "🧘", "#34C759"),
+            Triple("Chores / Task", "🧹", "#FFB340"),
+            Triple("Just woke up", "😴", "#AF52DE"),
+            Triple("Boredom",      "😶", "#6B7A9F")
+        )
+
+        for ((label, emoji, color) in contexts) {
+            layout.addView(
+                SurveyUIUtils.createOptionButton(this, label, emoji, color) {
+                    previousContext = label
+                    showIntentionPrompt()
+                }
+            )
+        }
+
+        layout.addView(SurveyUIUtils.createSkipButton(this) {
+            previousContext = "unknown"
             showIntentionPrompt()
         })
 
@@ -57,23 +97,23 @@ class IntentionProbeActivity : Activity() {
         setContentView(scroll)
     }
 
-    // ── Step 2: Intention ─────────────────────────────────────────────────────
+    // ── Step 3: Intention ─────────────────────────────────────────────────────
     private fun showIntentionPrompt() {
         val scroll = SurveyUIUtils.createScrollRoot(this)
         val layout = SurveyUIUtils.createMainLayout(this)
 
         layout.addView(SurveyUIUtils.createSystemLabel(this))
-        layout.addView(SurveyUIUtils.createStepIndicator(this, totalSteps = 2, currentStep = 2))
+        layout.addView(SurveyUIUtils.createStepIndicator(this, totalSteps = 3, currentStep = 3))
         layout.addView(SurveyUIUtils.createBadge(this, "PRE-SESSION  ·  INTENTION", "#0DDFF2"))
         layout.addView(SurveyUIUtils.createTitleView(this, "Why are you opening this?"))
         layout.addView(SurveyUIUtils.createSubtitle(this, "THE ALGORITHM WILL TRACK YOUR ACTUAL VS INTENDED"))
         layout.addView(SurveyUIUtils.createDivider(this))
 
         val options = listOf(
-            Triple("Browse",          "🌊", "#0DDFF2"),
-            Triple("Specific Search", "🔍", "#0A84FF"),
-            Triple("Habit",           "🔁", "#BF5AF2"),
-            Triple("Killing Time",    "⏱",  "#FFB340"),
+            Triple("Bored / Nothing to do",     "😶", "#0DDFF2"),
+            Triple("Stressed / Avoidance",      "😤", "#FF2D55"),
+            Triple("Habit / Automatic",         "🔁", "#BF5AF2"),
+            Triple("Quick break (intentional)", "☕", "#FFB340"),
         )
 
         for ((label, emoji, color) in options) {
@@ -104,7 +144,9 @@ class IntentionProbeActivity : Activity() {
         getSharedPreferences("InstaTrackerPrefs", Context.MODE_PRIVATE)
             .edit()
             .putInt("current_mood_before", moodBefore)
+            .putString("previous_context", previousContext)
             .putString("current_intended_action", intendedAction)
+            .putLong("intention_session_timestamp", System.currentTimeMillis())
             .apply()
         finish()
     }

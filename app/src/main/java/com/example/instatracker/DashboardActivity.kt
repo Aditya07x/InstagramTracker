@@ -27,14 +27,18 @@ class DashboardActivity : ComponentActivity() {
     private val handler = Handler(Looper.getMainLooper())
     private var injectionRunnable: Runnable? = null
     @Volatile private var isProcessing = false
-    private var injectionAttempts = 0
-    private val MAX_INJECTION_ATTEMPTS = 3
+    private lateinit var webView: WebView
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        val webView = WebView(this)
+        webView = WebView(this)
+        webView.setBackgroundColor(android.graphics.Color.parseColor("#05050A"))
+        webView.layoutParams = android.view.ViewGroup.LayoutParams(
+            android.view.ViewGroup.LayoutParams.MATCH_PARENT, 
+            android.view.ViewGroup.LayoutParams.MATCH_PARENT
+        )
         setContentView(webView)
 
         // Configure WebView
@@ -46,6 +50,9 @@ class DashboardActivity : ComponentActivity() {
         settings.allowFileAccessFromFileURLs = true
         settings.allowUniversalAccessFromFileURLs = true
         settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+        settings.cacheMode = WebSettings.LOAD_NO_CACHE
+
+        webView.clearCache(true)
 
         // Expose Interface for PDF Report Generation
         webView.addJavascriptInterface(DashboardInterface(this, webView), "Android")
@@ -62,7 +69,6 @@ class DashboardActivity : ComponentActivity() {
         webView.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
-                injectionAttempts = 0  // Reset retry counter
                 injectDataWithDebounce(webView)
             }
 
@@ -83,6 +89,15 @@ class DashboardActivity : ComponentActivity() {
 
         // Load the local HTML file
         webView.loadUrl("file:///android_asset/www/index.html")
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Re-inject data whenever returning from any external screen (Settings, etc.)
+        // WebView is already loaded; this just refreshes the data layer without a full reload.
+        if (::webView.isInitialized) {
+            injectDataWithDebounce(webView)
+        }
     }
 
     private fun injectDataWithDebounce(webView: WebView) {
@@ -106,23 +121,29 @@ class DashboardActivity : ComponentActivity() {
                             android.util.Log.d("ReactDashboard", "Loading pre-computed HMM JSON (${hmmFile.length()} bytes)")
                             hmmFile.readText(Charsets.UTF_8)
                         }
-                        csvFile.exists() -> {
+                        csvFile.exists() && csvFile.length() > 50 -> {
                             android.util.Log.d("ReactDashboard", "Running HMM inference on CSV…")
                             if (!Python.isStarted()) {
                                 Python.start(AndroidPlatform(this@DashboardActivity))
                             }
                             val csvContent = csvFile.readText()
                             val py = Python.getInstance()
-                            val hmmModule = py.getModule("reelio_alse")
-                            val result = hmmModule.callAttr("run_dashboard_payload", csvContent).toString()
-                            // Cache the fresh result
-                            hmmFile.writeText(result)
-                            result
+                            
+                            val dashLockWait1 = System.currentTimeMillis()
+                            android.util.Log.i("ReelioDiag", "Dashboard awaiting PYTHON_LOCK (dashboard_payload). time=$dashLockWait1")
+                            synchronized(InstaAccessibilityService.GLOBAL_PYTHON_LOCK) {
+                                android.util.Log.i("ReelioDiag", "Dashboard acquired PYTHON_LOCK (dashboard_payload). waited=${System.currentTimeMillis() - dashLockWait1}ms")
+                                val hmmModule = py.getModule("reelio_alse")
+                                val result = hmmModule.callAttr("run_dashboard_payload", csvContent).toString()
+                                // Cache the fresh result
+                                hmmFile.writeText(result)
+                                android.util.Log.i("ReelioDiag", "Dashboard releasing PYTHON_LOCK (dashboard_payload). time=${System.currentTimeMillis()}")
+                                result
+                            }
                         }
                         else -> {
                             handler.post {
                                 injectErrorToReact(webView, "No data yet. Open Instagram and scroll some Reels first!")
-                                isProcessing = false
                             }
                             return@execute
                         }
@@ -131,7 +152,6 @@ class DashboardActivity : ComponentActivity() {
                     if (jsonContent.isBlank() || jsonContent == "{}" || jsonContent.contains("\"error\"")) {
                         handler.post {
                             injectErrorToReact(webView, "Not enough data yet — scroll a few more sessions!")
-                            isProcessing = false
                         }
                         return@execute
                     }
@@ -143,28 +163,34 @@ class DashboardActivity : ComponentActivity() {
                     )
 
                     handler.post {
-                        try {
-                            webView.evaluateJavascript("javascript:injectDataB64('$b64');", null)
-                            android.util.Log.d("ReactDashboard", "HMM JSON injected via B64 (${b64.length} chars)")
-                        } catch (e: Exception) {
-                            android.util.Log.e("ReactDashboard", "JS injection error: ${e.message}", e)
-                            injectErrorToReact(webView, "Failed to render: ${e.message}")
-                        } finally {
-                            isProcessing = false
-                        }
+                        injectWhenReady(webView, b64)
                     }
 
                 } catch (e: Exception) {
                     android.util.Log.e("ReactDashboard", "Unexpected error: ${e.message}", e)
                     handler.post {
                         injectErrorToReact(webView, "Unexpected error: ${e.message}")
-                        isProcessing = false
                     }
+                } finally {
+                    isProcessing = false
                 }
             }
         }
 
         handler.postDelayed(injectionRunnable!!, 250)
+    }
+
+    private fun injectWhenReady(webView: WebView, b64: String, attemptsLeft: Int = 20) {
+        webView.evaluateJavascript("typeof injectDataB64 === 'function'") { result ->
+            if (result == "true") {
+                webView.evaluateJavascript("injectDataB64('$b64');", null)
+                android.util.Log.d("ReactDashboard", "Data injected successfully via polling")
+            } else if (attemptsLeft > 0) {
+                handler.postDelayed({ injectWhenReady(webView, b64, attemptsLeft - 1) }, 150)
+            } else {
+                injectErrorToReact(webView, "Dashboard failed to initialise")
+            }
+        }
     }
 
     private fun isCacheValid(hmmFile: File, csvFile: File): Boolean {
@@ -209,14 +235,13 @@ class DashboardActivity : ComponentActivity() {
 
     // New helper to inject error state directly to React
     private fun injectErrorToReact(webView: WebView, errorMsg: String) {
-        val errorJson = "{\"error\": \"$errorMsg\"}".replace("\"", "\\\"")
-        try {
-            val jsCode = "javascript:injectData('$errorJson');"
-            webView.evaluateJavascript(jsCode, null)
-            android.util.Log.d("ReactDashboard", "Error injected: $errorMsg")
-        } catch (e: Exception) {
-            android.util.Log.e("ReactDashboard", "Failed to inject error: ${e.message}")
-        }
+        val safeMsg = errorMsg.replace("\"", "'")
+        val errorJson = "{\"error\": \"$safeMsg\", \"sessions\": []}"
+        val b64 = android.util.Base64.encodeToString(
+            errorJson.toByteArray(Charsets.UTF_8),
+            android.util.Base64.NO_WRAP
+        )
+        injectWhenReady(webView, b64)
     }
 
     override fun onDestroy() {
@@ -290,9 +315,17 @@ class DashboardActivity : ComponentActivity() {
                         if (!Python.isStarted()) {
                             Python.start(AndroidPlatform(mContext))
                         }
-                        val py = Python.getInstance()
-                        val hmmModule = py.getModule("reelio_alse")
-                        hmmModule.callAttr("run_report_payload", csvContent).toString()
+                        
+                        val dashLockWait2 = System.currentTimeMillis()
+                        android.util.Log.i("ReelioDiag", "Dashboard awaiting PYTHON_LOCK (report_payload). time=$dashLockWait2")
+                        synchronized(InstaAccessibilityService.GLOBAL_PYTHON_LOCK) {
+                            android.util.Log.i("ReelioDiag", "Dashboard acquired PYTHON_LOCK (report_payload). waited=${System.currentTimeMillis() - dashLockWait2}ms")
+                            val py = Python.getInstance()
+                            val hmmModule = py.getModule("reelio_alse")
+                            val result = hmmModule.callAttr("run_report_payload", csvContent).toString()
+                            android.util.Log.i("ReelioDiag", "Dashboard releasing PYTHON_LOCK (report_payload). time=${System.currentTimeMillis()}")
+                            result
+                        }
                     } catch (e: Exception) {
                         "{\"error\": \"${e.message}\"}"
                     }
@@ -317,5 +350,29 @@ class DashboardActivity : ComponentActivity() {
                 mContext.startActivity(android.content.Intent.createChooser(intent, "Share Behavioral Baseline Data"))
             }
         }
+
+        @JavascriptInterface
+        fun getLaunchTab(): String = "dashboard"
+
+        @JavascriptInterface
+        fun isAccessibilityEnabled(): Boolean = true // Mocked for DashboardActivity
+
+        @JavascriptInterface
+        fun enableAccessibility() {}
+
+        @JavascriptInterface
+        fun clearData() {}
+
+        @JavascriptInterface
+        fun getSurveyFrequency(): Float = 0.35f
+
+        @JavascriptInterface
+        fun setSurveyFrequency(freq: Float) {}
+
+        @JavascriptInterface
+        fun getSleepSchedule(): String = "23,7"
+
+        @JavascriptInterface
+        fun setSleepSchedule(start: Int, end: Int) {}
     }
 }
