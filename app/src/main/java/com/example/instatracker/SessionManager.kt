@@ -167,6 +167,9 @@ object SessionManager {
                     InteractionType.LIKE -> likeCount++
                     InteractionType.COMMENT -> commentClickCount++
                     InteractionType.SHARE -> shareCount++
+                    InteractionType.SAVE -> {
+                        // SessionManager does not currently persist a save counter.
+                    }
                 }
             }
         }

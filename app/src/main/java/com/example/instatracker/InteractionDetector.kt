@@ -5,7 +5,8 @@ import android.view.accessibility.AccessibilityEvent
 enum class InteractionType {
     LIKE,
     COMMENT,
-    SHARE
+    SHARE,
+    SAVE
 }
 
 object InteractionDetector {
@@ -18,15 +19,19 @@ object InteractionDetector {
             val contentDesc = source.contentDescription?.toString()?.lowercase().orEmpty()
             val text = event.text?.joinToString(" ")?.lowercase().orEmpty()
             val combinedLabel = "$contentDesc $text"
+            val words = extractWords(combinedLabel)
 
-            if (isLike(viewId, className, combinedLabel)) {
+            if (isLike(viewId, className, combinedLabel, words)) {
                 return InteractionType.LIKE
             }
-            if (isComment(viewId, className, combinedLabel)) {
+            if (isComment(viewId, className, combinedLabel, words)) {
                 return InteractionType.COMMENT
             }
-            if (isShare(viewId, className, combinedLabel)) {
+            if (isShare(viewId, className, combinedLabel, words)) {
                 return InteractionType.SHARE
+            }
+            if (isSave(viewId, className, combinedLabel, words)) {
+                return InteractionType.SAVE
             }
 
             return null
@@ -35,24 +40,55 @@ object InteractionDetector {
         }
     }
 
-    private fun isLike(viewId: String, className: String, label: String): Boolean {
-        if ("like" in viewId || "like_button" in viewId || "heart" in viewId) return true
-        if ("like" in label || "curtir" in label || "me gusta" in label) return true
-        if ("imagebutton" in className && ("like" in label || "heart" in label)) return true
+    private val likeWords = setOf("like", "liked", "curtir", "curtido", "gusta")
+    private val commentWords = setOf("comment", "comments", "coment", "comentar", "reply", "replies")
+    private val shareWords = setOf("share", "shared", "send", "enviar", "compart", "compartir")
+    private val saveWords = setOf("save", "saved", "bookmark", "collection", "ribbon")
+
+    private fun extractWords(label: String): Set<String> {
+        return label
+            .split(Regex("[^a-z0-9]+"))
+            .filter { it.isNotBlank() }
+            .toSet()
+    }
+
+    private fun isLikelyActionLabel(label: String, words: Set<String>): Boolean {
+        return label.length in 1..40 && words.size in 1..5
+    }
+
+    private fun idContainsAny(viewId: String, tokens: Set<String>): Boolean {
+        return tokens.any { viewId.contains(it) }
+    }
+
+    private fun hasAnyActionWord(words: Set<String>, tokens: Set<String>): Boolean {
+        return words.any { word -> tokens.any { token -> word == token || word.startsWith(token) } }
+    }
+
+    private fun isLike(viewId: String, className: String, label: String, words: Set<String>): Boolean {
+        if (idContainsAny(viewId, setOf("like", "heart"))) return true
+        if (className.contains("button") && hasAnyActionWord(words, likeWords)) return true
+        if (isLikelyActionLabel(label, words) && hasAnyActionWord(words, likeWords)) return true
         return false
     }
 
-    private fun isComment(viewId: String, className: String, label: String): Boolean {
-        if ("comment" in viewId || "comment_button" in viewId) return true
-        if ("comment" in label || "coment" in label || "comentar" in label) return true
-        if ("imagebutton" in className && "comment" in label) return true
+    private fun isComment(viewId: String, className: String, label: String, words: Set<String>): Boolean {
+        if (idContainsAny(viewId, setOf("comment", "reply"))) return true
+        if (className.contains("button") && hasAnyActionWord(words, commentWords)) return true
+        if (isLikelyActionLabel(label, words) && hasAnyActionWord(words, commentWords)) return true
         return false
     }
 
-    private fun isShare(viewId: String, className: String, label: String): Boolean {
-        if ("share" in viewId || "send" in viewId) return true
-        if ("share" in label || "send" in label || "compart" in label || "enviar" in label) return true
-        if ("imagebutton" in className && ("share" in label || "send" in label)) return true
+    private fun isShare(viewId: String, className: String, label: String, words: Set<String>): Boolean {
+        if (idContainsAny(viewId, setOf("share", "send", "forward"))) return true
+        if (className.contains("button") && hasAnyActionWord(words, shareWords)) return true
+        if (isLikelyActionLabel(label, words) && hasAnyActionWord(words, shareWords)) return true
+        return false
+    }
+
+    private fun isSave(viewId: String, className: String, label: String, words: Set<String>): Boolean {
+        if (idContainsAny(viewId, setOf("save", "bookmark", "collection", "ribbon"))) return true
+        if (className.contains("button") && hasAnyActionWord(words, saveWords)) return true
+        if (isLikelyActionLabel(label, words) && hasAnyActionWord(words, saveWords)) return true
         return false
     }
 }

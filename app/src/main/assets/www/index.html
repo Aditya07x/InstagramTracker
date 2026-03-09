@@ -1080,7 +1080,7 @@
         var cd = (1 / escapeRate).toFixed(1);
         function tog(k) { setExp(exp === k ? null : k); }
 
-        var avgRls = p.avgNReels ? Math.round(p.avgNReels) : 420;
+        var avgRls = p.avgNReels ? Math.round(p.avgNReels) : null;
 
         // Derive exposure headline from observed days only (no zero-padding bias).
         var observedD14 = D14.filter(function (d) { return d && d.hasData; });
@@ -1333,7 +1333,7 @@
                   return sum + (S.doom_components[k] || 0) * (DOOM_WEIGHTS[k] || 0);
                 }, 0);
                 var items = [
-                  { k: "session_length", l: "Session Length", icon: "BarChart2", desc: "Your session exceeded your historical average of " + avgRls + " reels. This is the strongest indicator of compromised volition." },
+                  { k: "session_length", l: "Session Length", icon: "BarChart2", desc: "Your session exceeded your historical average" + (avgRls !== null ? (" of " + avgRls + " reels") : "") + ". This is the strongest indicator of compromised volition." },
                   { k: "exit_conflict", l: "Exit Conflict", icon: "Lock", desc: "You repeatedly closed and re-opened the app within a 20s window, indicating internal conflict." },
                   { k: "rapid_reentry", l: "Rapid Re-entry", icon: "Zap", desc: "Short intervals between sessions. The model interprets this as a failure to transition to a resting state." },
                   { k: "scroll_automaticity", l: "Scroll Automaticity", icon: "Activity", desc: "Extremely low variance in your swipe cadence. The rhythm has become robotic and stimulus-bound." },
@@ -2075,9 +2075,9 @@
 
           function validateData(d) {
             d = d || {};
-            d.sessions = Array.isArray(d.sessions) ? d.sessions : [{ S_t: 0.1, nReels: 0 }];
+            d.sessions = Array.isArray(d.sessions) ? d.sessions : [];
             d.circadian = Array.isArray(d.circadian) ? d.circadian : [];
-            d.model_confidence = typeof d.model_confidence === 'number' ? d.model_confidence : 0.5;
+            d.model_confidence = typeof d.model_confidence === 'number' ? d.model_confidence : 0;
             d.timeline = d.timeline || { p_capture: [] };
             d.model_parameters = d.model_parameters || { transition_matrix: [[0.8, 0.2], [0.2, 0.8]] };
             return d;

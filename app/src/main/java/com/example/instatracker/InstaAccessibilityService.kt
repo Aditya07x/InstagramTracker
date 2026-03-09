@@ -365,31 +365,41 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
                 val desc = event.contentDescription?.toString()?.lowercase() ?: ""
                 val text = event.text?.joinToString(" ")?.lowercase() ?: ""
                 val latency = now - lastReelStartTime
-                
-                if (desc.contains("like") || text.contains("like")) {
-                    liked = true
-                    if (likeLatencyMs == -1L) likeLatencyMs = latency
-                    likeStreakLength++
-                    if (likeStreakLength > maxLikeStreakLength) maxLikeStreakLength = likeStreakLength
-                    halfSessionInteractions.add(reelCount)
+
+                val hasActiveReel = currentReelIndex != null && reelCount > 0 && lastReelStartTime > 0L
+                if (hasActiveReel) {
+                    when (InteractionDetector.detectInteraction(event)) {
+                        InteractionType.LIKE -> {
+                            liked = true
+                            savedWithoutLike = false
+                            if (likeLatencyMs == -1L) likeLatencyMs = latency
+                            likeStreakLength++
+                            if (likeStreakLength > maxLikeStreakLength) maxLikeStreakLength = likeStreakLength
+                            halfSessionInteractions.add(reelCount)
+                        }
+                        InteractionType.COMMENT -> {
+                            commented = true
+                            if (commentLatencyMs == -1L) commentLatencyMs = latency
+                            commentAbandoned = true
+                            halfSessionInteractions.add(reelCount)
+                        }
+                        InteractionType.SHARE -> {
+                            shared = true
+                            if (shareLatencyMs == -1L) shareLatencyMs = latency
+                            halfSessionInteractions.add(reelCount)
+                        }
+                        InteractionType.SAVE -> {
+                            saved = true
+                            if (saveLatencyMs == -1L) saveLatencyMs = latency
+                            if (!liked) savedWithoutLike = true
+                            halfSessionInteractions.add(reelCount)
+                        }
+                        null -> {
+                            // No recognized interaction for this click.
+                        }
+                    }
                 }
-                if (desc.contains("reply") || desc.contains("comment") || text.contains("reply")) {
-                    commented = true
-                    if (commentLatencyMs == -1L) commentLatencyMs = latency
-                    commentAbandoned = true
-                    halfSessionInteractions.add(reelCount)
-                }
-                if (desc.contains("share") || desc.contains("send") || text.contains("share")) {
-                    shared = true
-                    if (shareLatencyMs == -1L) shareLatencyMs = latency
-                    halfSessionInteractions.add(reelCount)
-                }
-                if (desc.contains("save") || desc.contains("saved") || desc.contains("bookmark") ||
-                        desc.contains("ribbon") || desc.contains("collection") ||
-                        text.contains("save") || text.contains("saved") || text.contains("collection")) {
-                    saved = true
-                    if (saveLatencyMs == -1L) saveLatencyMs = latency
-                }
+
                 if (text == "more" || desc.contains("expand")) {
                     captionExpanded = true
                 }
@@ -487,8 +497,8 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
                                     // Account for skipped reels (fast multi-swipe).
                                     // If user swiped from reel 1 to reel 9, reels 2-8
                                     // were never dwelled on but ARE real automaticity
-                                    // signal. We increment counters so reel 9's CSV row
-                                    // correctly shows ScrollStreak=8, CumulativeReels+=8.
+                                    // signal. We increment reel/session counters so the
+                                    // next recorded row reflects the true reel position.
                                     // We do NOT write individual rows for skipped reels
                                     // because we have no per-reel data for them.
                                     val skippedCount = Math.abs(capturedTarget - current) - 1
@@ -497,6 +507,12 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
                                     }
 
                                     processPreviousReel(System.currentTimeMillis())
+                                    if (skippedCount > 0) {
+                                        // Apply skipped reels after writing the previous row
+                                        // so that row indices stay consistent.
+                                        reelCount += skippedCount
+                                        cumulativeReels += skippedCount
+                                    }
                                     currentReelIndex = capturedTarget
                                     settleTargetIndex = -1
                                     startNextReel(System.currentTimeMillis())
@@ -569,6 +585,7 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
     }
 
     private fun startNextReel(now: Long) {
+        val previousReelLiked = liked
         reelCount++
         cumulativeReels++
         
@@ -602,7 +619,7 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
         profileVisits = 0
         hashtagTaps = 0
         
-        if (!liked) likeStreakLength = 0
+        if (!previousReelLiked) likeStreakLength = 0
         savedWithoutLike = false
         commentAbandoned = false
         
@@ -1379,13 +1396,37 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
     private fun ensureCsvHeader() {
         synchronized(GLOBAL_PYTHON_LOCK) {
             val file = File(filesDir, "insta_data.csv")
+            val expectedHeaderLine = CSV_HEADER.lines().drop(1).first()
             if (!file.exists() || file.length() == 0L) {
                 file.writeText(CSV_HEADER)
             } else {
-                val firstLine = file.useLines { it.firstOrNull() }
+                val lines = file.readLines()
+                val firstLine = lines.firstOrNull()
                 if (firstLine != "SCHEMA_VERSION=5") {
                     Log.w("InstaTracker", "Old schema detected. Overwriting insta_data.csv")
                     file.writeText(CSV_HEADER)
+                } else {
+                    val headerLine = lines.getOrNull(1)
+                    val headerCols = headerLine?.split(",")?.size ?: 0
+                    val needsHeaderMigration =
+                        headerLine == null ||
+                        headerCols != EXPECTED_CSV_COLUMNS ||
+                        headerLine != expectedHeaderLine
+
+                    if (needsHeaderMigration) {
+                        Log.w("InstaTracker", "CSV header mismatch detected. Migrating header in-place")
+                        val dataLines = if (lines.size > 2) lines.drop(2) else emptyList()
+                        val migrated = buildString {
+                            append("SCHEMA_VERSION=5\n")
+                            append(expectedHeaderLine)
+                            if (dataLines.isNotEmpty()) {
+                                append("\n")
+                                append(dataLines.joinToString("\n"))
+                            }
+                            append("\n")
+                        }
+                        file.writeText(migrated)
+                    }
                 }
             }
         }

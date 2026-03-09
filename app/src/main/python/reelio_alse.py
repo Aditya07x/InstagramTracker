@@ -32,7 +32,6 @@ COMPONENT_NAMES = [
 ]
 
 # NO scipy.linalg, hmmlearn, sklearn or scipy.stats ALLOWED
-from scipy.optimize import fmin_bfgs, minimize
 
 # Compatibility patch: reportlab calls md5(usedforsecurity=False) which requires Python 3.9+.
 # Chaquopy runs Python 3.8, so we strip the kwarg before it reaches OpenSSL.
@@ -93,7 +92,7 @@ REQUIRED_COLUMNS = [
     "CircadianPhase", "SleepProxyScore", "EstimatedSleepDurationH", "ConsistencyScore", "IsWeekend",
     "PostSessionRating", "IntendedAction", "ActualVsIntendedMatch", "RegretScore", "MoodBefore", "MoodAfter", "MoodDelta",
     "SleepStart", "SleepEnd",
-    "PreviousContext", "DelayedRegretScore", "ComparativeRating"
+    "PreviousContext", "DelayedRegretScore", "ComparativeRating", "MorningRestScore"
 ]
 
 class SchemaError(Exception):
@@ -163,6 +162,31 @@ def normalize_prestate_risk(raw_value) -> float:
         return float(np.clip(val / 10.0, 0.0, 1.0))
     return float(np.clip(val / 100.0, 0.0, 1.0))
 
+
+def effective_session_reel_count(df: pd.DataFrame) -> int:
+    """
+    Estimate true reels traversed for a session.
+    Falls back to observed rows, but uses CumulativeReels when fast multi-swipes
+    skip intermediate reels without producing one row per skipped reel.
+    """
+    observed = int(len(df))
+    if observed <= 0:
+        return 0
+
+    if 'CumulativeReels' not in df.columns:
+        return observed
+
+    try:
+        cum_vals = pd.to_numeric(df['CumulativeReels'], errors='coerce').dropna()
+        if len(cum_vals) == 0:
+            return observed
+        cum_max = int(cum_vals.max())
+        if cum_max <= 0:
+            return observed
+        return max(observed, cum_max)
+    except Exception:
+        return observed
+
 def preprocess_session(df):
     df = df.copy()
     
@@ -177,6 +201,7 @@ def preprocess_session(df):
         'PostSessionRating': 0.0,
         'RegretScore': 0.0,
         'MoodDelta': 0.0,
+        'MorningRestScore': 0.0,
         # NOTE: TimeSinceLastSessionMin = 0 means "gap not tracked by Kotlin" (session end time not
         # persisted), NOT "instant re-entry". The DoomScorer.score() gap_min == 0 branch handles this.
         # The default 60.0 below only fires when the COLUMN is entirely absent (schema upgrade path).
@@ -201,7 +226,8 @@ def preprocess_session(df):
     if 'exit_flag' not in df.columns:
         df['exit_flag'] = (df['AppExitAttempts'] > 0).astype(float)
     if 'swipe_incomplete' not in df.columns:
-        df['swipe_incomplete'] = 1.0 - (df['SwipeCompletionRatio'] if 'SwipeCompletionRatio' in df.columns else 1.0)
+        completion_ratio = (df['SwipeCompletionRatio'] if 'SwipeCompletionRatio' in df.columns else 1.0)
+        df['swipe_incomplete'] = np.clip(1.0 - completion_ratio, 0.0, 1.0)
         
     if 'supervised_doom' not in df.columns:
         # Ground Truth Labeling Layer: Weighted blend of immediate and delayed signals
@@ -275,7 +301,7 @@ class UserBaseline:
         if len(session_df) == 0:
             return
         
-        sess_len = len(session_df)
+        sess_len = max(1, effective_session_reel_count(session_df))
         log_dwells = session_df['log_dwell'].values
         m_dwell = np.mean(log_dwells)
         s_dwell = np.std(log_dwells) if sess_len > 1 else 0.5
@@ -458,7 +484,7 @@ class DoomScorer:
         if len(session_df) == 0:
             return {'doom_score': 0.0, 'label': 'CASUAL', 'components': {}}
             
-        n_reels = len(session_df)
+        n_reels = max(1, effective_session_reel_count(session_df))
         
         c_length = min(n_reels / max(1.0, baseline.session_len_mu + 2 * baseline.session_len_sig), 1.0)
         
@@ -1244,7 +1270,8 @@ class ReelioCLSE:
         # Dominance determined using raw behavioral mean vs hard threshold
         dominant_state = 1 if raw_mean_doom >= DOOM_PROBABILITY_THRESHOLD else 0
             
-        self._update_ss(gamma, xi, obs, dominant_state, len(df), reg_alert)
+        effective_reels = max(1, effective_session_reel_count(df))
+        self._update_ss(gamma, xi, obs, dominant_state, effective_reels, reg_alert)
         self.n_sessions_seen += 1
         
         baseline.update(df, reported_blended_prob, 0.95 if not reg_alert else 0.99)
@@ -1433,7 +1460,14 @@ def run_inference_on_latest(csv_data: str, model_state_path: str, survey_data: d
     first_line = f.readline().strip()
     if first_line != f"SCHEMA_VERSION={EXPECTED_SCHEMA_VERSION}":
         raise SchemaError(f"Expected SCHEMA_VERSION={EXPECTED_SCHEMA_VERSION}, got: {first_line}")
-    full_df = pd.read_csv(f)
+
+    lines = f.read().split('\n')
+    if lines and lines[0].strip():
+        header_cols = lines[0].split(',')
+        if len(header_cols) < len(REQUIRED_COLUMNS):
+            print(f"SCHEMA_REWRITE: CSV has {len(header_cols)} columns, forcing {len(REQUIRED_COLUMNS)} REQUIRED_COLUMNS in run_inference_on_latest.")
+            lines[0] = ','.join(REQUIRED_COLUMNS)
+    full_df = pd.read_csv(io.StringIO('\n'.join(lines)))
         
     validate_csv_schema(full_df)
     
@@ -1642,8 +1676,10 @@ def run_dashboard_payload(csv_data: str, state_path: str = None, survey_data: di
                 date_str = pd.to_datetime(s_df['StartTime'].iloc[0]).strftime('%m-%d')
             except:
                 date_str = "Unknown"
-            
-            avg_dwell = float(s_df['DwellTime'].mean()) if 'DwellTime' in s_df.columns else float(np.exp(s_df['log_dwell']).mean())
+
+            effective_reels = max(1, effective_session_reel_count(s_df))
+            total_dwell = float(s_df['DwellTime'].sum()) if 'DwellTime' in s_df.columns else float(np.exp(s_df['log_dwell']).sum())
+            avg_dwell = total_dwell / effective_reels
 
             # FIX: aggregate interaction counts per session and include in payload
             # Liked/Commented/Shared/Saved are per-reel binary flags — .sum() = total count
@@ -1671,7 +1707,7 @@ def run_dashboard_payload(csv_data: str, state_path: str = None, survey_data: di
                 "sessionNum":          str(sess_id),
                 "S_t":                 S_t_reported,
                 "dominantState":       dom_state,
-                "nReels":              len(s_df),
+                "nReels":              effective_reels,
                 "avgDwell":            avg_dwell,
                 "timePeriod":          str(time_period),
                 "date":                str(date_str),
