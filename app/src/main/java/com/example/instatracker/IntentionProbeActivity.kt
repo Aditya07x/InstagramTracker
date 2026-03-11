@@ -1,15 +1,19 @@
 package com.example.instatracker
 
 import android.app.Activity
-import android.os.Bundle
 import android.content.Context
 import android.graphics.Color
-import android.view.Gravity
+import android.os.Bundle
 import android.view.WindowManager
-import android.widget.LinearLayout
-import android.widget.TextView
 
-// Triggered at Session START (sampled at ~30%)
+/**
+ * Pre-session survey — 3 steps:
+ *   1. Current mood / stress state
+ *   2. Previous context (what were you doing)
+ *   3. Intention (why are you opening Instagram)
+ *
+ * Uses blob background, progress ring, glass cards, gradient titles.
+ */
 class IntentionProbeActivity : Activity() {
 
     private var moodBefore = 0
@@ -18,39 +22,35 @@ class IntentionProbeActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        // Translucent status bar for immersive feel
         window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS)
-        window.statusBarColor = Color.parseColor("#05050A")
-
+        window.statusBarColor = Color.parseColor("#EDE8DF")
         showMoodPrompt()
     }
 
-    // ── Step 1: Stress/Restlessness State ─────────────────────────────────────
+    // ── Step 1: Mood / Stress State ───────────────────────────────────────────
     private fun showMoodPrompt() {
-        val scroll = SurveyUIUtils.createScrollRoot(this)
+        val (root, scroll) = SurveyUIUtils.createRootWithBlobs(this, BlobBackgroundView.Palette.PRE)
         val layout = SurveyUIUtils.createMainLayout(this)
 
         layout.addView(SurveyUIUtils.createSystemLabel(this))
-        layout.addView(SurveyUIUtils.createStepIndicator(this, totalSteps = 3, currentStep = 1))
-        layout.addView(SurveyUIUtils.createBadge(this, "PRE-SESSION  ·  STATE CHECK", "#0DDFF2"))
-        layout.addView(SurveyUIUtils.createTitleView(this, "Right now I feel..."))
-        layout.addView(SurveyUIUtils.createSubtitle(this, "SELECT YOUR CURRENT STATE"))
-        layout.addView(SurveyUIUtils.createDivider(this))
+        layout.addView(SurveyUIUtils.createProgressRing(this, totalSteps = 3, currentStep = 1, accentColor = "#6B3FA0"))
+        layout.addView(SurveyUIUtils.createBadge(this, "PRE-SESSION  \u00B7  STATE CHECK", "#6B3FA0"))
+        layout.addView(SurveyUIUtils.createGradientTitle(this, "Right now I feel...", "#6B3FA0"))
+        layout.addView(SurveyUIUtils.createSubtitle(this, "take a moment to check in"))
 
+        val cardStartIdx = layout.childCount
         val stressOptions = listOf(
-            Triple("Calm and focused", "😌", "#34C759") to 1,
-            Triple("A bit restless or bored", "😶", "#0A84FF") to 6,
-            Triple("Stressed or overwhelmed", "😤", "#FF2D55") to 10,
-            Triple("Tired / winding down", "🥱", "#BF5AF2") to 7,
-            Triple("Fine, just taking a break", "☕", "#FFB340") to 2
+            Triple("Calm and focused",        "", "#3A9E6F") to 1,
+            Triple("A bit restless or bored", "", "#6B3FA0") to 6,
+            Triple("Stressed or overwhelmed", "", "#C4563A") to 10,
+            Triple("Tired / winding down",    "", "#9B6FCC") to 7,
+            Triple("Fine, just taking a break","", "#C4973A") to 2
         )
 
         for ((choice, encodedRisk) in stressOptions) {
-            val (label, emoji, color) = choice
+            val (label, _, color) = choice
             layout.addView(
-                SurveyUIUtils.createOptionButton(this, label, emoji, color) {
-                    // Encoded risk scale for Python: 1->0.0, 2->0.1, 6->0.6, 7->0.7, 10->1.0
+                SurveyUIUtils.createOptionButton(this, label, accentColor = color) {
                     moodBefore = encodedRisk
                     showContextPrompt()
                 }
@@ -63,33 +63,36 @@ class IntentionProbeActivity : Activity() {
         })
 
         scroll.addView(layout)
-        setContentView(scroll)
+        setContentView(root)
+
+        // Stagger card entrance
+        layout.post { SurveyUIUtils.staggerCards(layout, cardStartIdx, stressOptions.size) }
     }
 
-    // ── Step 2: Previous Context ─────────────────────────────────────────────
+    // ── Step 2: Previous Context ──────────────────────────────────────────────
     private fun showContextPrompt() {
-        val scroll = SurveyUIUtils.createScrollRoot(this)
+        val (root, scroll) = SurveyUIUtils.createRootWithBlobs(this, BlobBackgroundView.Palette.PRE)
         val layout = SurveyUIUtils.createMainLayout(this)
 
         layout.addView(SurveyUIUtils.createSystemLabel(this))
-        layout.addView(SurveyUIUtils.createStepIndicator(this, totalSteps = 3, currentStep = 2))
-        layout.addView(SurveyUIUtils.createBadge(this, "PRE-SESSION  ·  CONTEXT", "#0DDFF2"))
-        layout.addView(SurveyUIUtils.createTitleView(this, "What were you just doing?"))
-        layout.addView(SurveyUIUtils.createSubtitle(this, "REPLACES UNRELIABLE USAGESTATS DETECTION"))
-        layout.addView(SurveyUIUtils.createDivider(this))
+        layout.addView(SurveyUIUtils.createProgressRing(this, totalSteps = 3, currentStep = 2, accentColor = "#6B3FA0"))
+        layout.addView(SurveyUIUtils.createBadge(this, "PRE-SESSION  \u00B7  CONTEXT", "#6B3FA0"))
+        layout.addView(SurveyUIUtils.createGradientTitle(this, "What were you just doing?", "#6B3FA0"))
+        layout.addView(SurveyUIUtils.createSubtitle(this, "what was happening before you opened up?"))
 
+        val cardStartIdx = layout.childCount
         val contexts = listOf(
-            Triple("Work / Study", "💼", "#0DDFF2"),
-            Triple("Socializing",  "💬", "#BF5AF2"),
-            Triple("Relaxing",     "🧘", "#34C759"),
-            Triple("Chores / Task", "🧹", "#FFB340"),
-            Triple("Just woke up", "😴", "#AF52DE"),
-            Triple("Boredom",      "😶", "#6B7A9F")
+            Pair("Work / Study",  "#6B3FA0"),
+            Pair("Socializing",   "#9B6FCC"),
+            Pair("Relaxing",      "#3A9E6F"),
+            Pair("Chores / Task", "#C4973A"),
+            Pair("Just woke up",  "#6366F1"),
+            Pair("Boredom",       "#8C7F73")
         )
 
-        for ((label, emoji, color) in contexts) {
+        for ((label, color) in contexts) {
             layout.addView(
-                SurveyUIUtils.createOptionButton(this, label, emoji, color) {
+                SurveyUIUtils.createOptionButton(this, label, accentColor = color) {
                     previousContext = label
                     showIntentionPrompt()
                 }
@@ -102,37 +105,34 @@ class IntentionProbeActivity : Activity() {
         })
 
         scroll.addView(layout)
-        setContentView(scroll)
+        setContentView(root)
+
+        layout.post { SurveyUIUtils.staggerCards(layout, cardStartIdx, contexts.size) }
     }
 
     // ── Step 3: Intention ─────────────────────────────────────────────────────
     private fun showIntentionPrompt() {
-        val scroll = SurveyUIUtils.createScrollRoot(this)
+        val (root, scroll) = SurveyUIUtils.createRootWithBlobs(this, BlobBackgroundView.Palette.PRE)
         val layout = SurveyUIUtils.createMainLayout(this)
 
         layout.addView(SurveyUIUtils.createSystemLabel(this))
-        layout.addView(SurveyUIUtils.createStepIndicator(this, totalSteps = 3, currentStep = 3))
-        layout.addView(SurveyUIUtils.createBadge(this, "PRE-SESSION  ·  INTENTION", "#0DDFF2"))
-        layout.addView(SurveyUIUtils.createTitleView(this, "Why are you opening this?"))
-        layout.addView(SurveyUIUtils.createSubtitle(this, "THE ALGORITHM WILL TRACK YOUR ACTUAL VS INTENDED"))
-        layout.addView(SurveyUIUtils.createDivider(this))
+        layout.addView(SurveyUIUtils.createProgressRing(this, totalSteps = 3, currentStep = 3, accentColor = "#6B3FA0"))
+        layout.addView(SurveyUIUtils.createBadge(this, "PRE-SESSION  \u00B7  INTENTION", "#6B3FA0"))
+        layout.addView(SurveyUIUtils.createGradientTitle(this, "Why are you opening this?", "#6B3FA0"))
+        layout.addView(SurveyUIUtils.createSubtitle(this, "knowing this helps you notice patterns"))
 
+        val cardStartIdx = layout.childCount
         val options = listOf(
-            Triple("Bored / Nothing to do",     "😶", "#0DDFF2"),
-            Triple("Stressed / Avoidance",      "😤", "#FF2D55"),
-            Triple("Procrastinating something", "⏰", "#FF9500"),
-            Triple("Habit / Automatic",         "🔁", "#BF5AF2"),
-            Triple("Quick break (intentional)", "☕", "#FFB340"),
+            Pair("Bored / Nothing to do",     "#C4973A"),
+            Pair("Stressed / Avoidance",      "#C4563A"),
+            Pair("Procrastinating something", "#C4973A"),
+            Pair("Habit / Automatic",         "#6B3FA0"),
+            Pair("Quick break (intentional)", "#3A9E6F")
         )
 
-        for ((label, emoji, color) in options) {
+        for ((label, color) in options) {
             layout.addView(
-                SurveyUIUtils.createOptionButton(
-                    context     = this,
-                    label       = label,
-                    emoji       = emoji,
-                    accentColor = color
-                ) {
+                SurveyUIUtils.createOptionButton(this, label, accentColor = color) {
                     intendedAction = label
                     saveAndFinish()
                 }
@@ -145,7 +145,9 @@ class IntentionProbeActivity : Activity() {
         })
 
         scroll.addView(layout)
-        setContentView(scroll)
+        setContentView(root)
+
+        layout.post { SurveyUIUtils.staggerCards(layout, cardStartIdx, options.size) }
     }
 
     // ── Persist + close ───────────────────────────────────────────────────────
