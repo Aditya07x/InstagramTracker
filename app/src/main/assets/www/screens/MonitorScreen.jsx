@@ -128,7 +128,7 @@ function HeroBlock({ data }) {
     if (isFiniteNumber(doomStreak) && doomStreak >= 3)
         chips.push({ t: `${doomStreak} autopilot in a row`, dark: true });
     if (isFiniteNumber(mindfulStreak) && mindfulStreak >= 3)
-        chips.push({ t: `${mindfulStreak} mindful in a row ✨`, dark: false });
+        chips.push({ t: `${mindfulStreak} mindful in a row`, dark: false });
     if (isFiniteNumber(score) && isFiniteNumber(avg)) {
         const d = score - avg;
         if (d > 8) chips.push({ t: `↑ Higher risk than usual`, dark: true });
