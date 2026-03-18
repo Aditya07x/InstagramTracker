@@ -20,6 +20,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import android.util.Base64
+import org.json.JSONArray
+import org.json.JSONObject
 
 class DashboardActivity : ComponentActivity() {
 
@@ -125,6 +128,45 @@ class DashboardActivity : ComponentActivity() {
         android.util.Log.d("ReactDashboard", "Drained retroactive label callback to WebView")
     }
 
+    private fun mergePendingRetroactiveLabelIntoPayload(jsonContent: String): String {
+        val prefs = getSharedPreferences("InstaTrackerPrefs", Context.MODE_PRIVATE)
+        val b64 = prefs.getString("pending_retroactive_label_b64", null) ?: return jsonContent
+        val ts = prefs.getLong("pending_retroactive_label_ts", 0L)
+        if (System.currentTimeMillis() - ts > 5 * 60 * 1000L) return jsonContent
+
+        return try {
+            val label = JSONObject(String(Base64.decode(b64, Base64.DEFAULT), Charsets.UTF_8))
+            val root = JSONObject(jsonContent)
+            val sessionNum = label.optString("sessionNum", "")
+            val sessionDate = label.optString("date", "")
+            var patched = false
+
+            fun patchSessions(arr: JSONArray?) {
+                if (arr == null) return
+                for (i in 0 until arr.length()) {
+                    val sess = arr.optJSONObject(i) ?: continue
+                    val matchesNum = sess.optString("sessionNum", "") == sessionNum
+                    val matchesDate = sess.optString("date", "") == sessionDate
+                    if (!matchesNum || !matchesDate) continue
+                    val keys = label.keys()
+                    while (keys.hasNext()) {
+                        val key = keys.next()
+                        sess.put(key, label.get(key))
+                    }
+                    patched = true
+                }
+            }
+
+            patchSessions(root.optJSONArray("sessions"))
+            patchSessions(root.optJSONArray("todaySessions"))
+
+            if (patched) root.toString() else jsonContent
+        } catch (e: Exception) {
+            android.util.Log.w("ReactDashboard", "Failed to merge pending retroactive label into payload: ${e.message}")
+            jsonContent
+        }
+    }
+
     private fun injectDataWithDebounce(webView: WebView) {
         injectionRunnable?.let { handler.removeCallbacks(it) }
 
@@ -141,7 +183,7 @@ class DashboardActivity : ComponentActivity() {
                     val hmmFile  = File(filesDir, "hmm_results.json")
                     val csvFile  = File(filesDir, "insta_data.csv")
 
-                    val jsonContent: String = when {
+                    val jsonContentRaw: String = when {
                         hmmFile.exists() && hmmFile.length() > 10 && isCacheValid(hmmFile, csvFile) -> {
                             android.util.Log.d("ReactDashboard", "Loading pre-computed HMM JSON (${hmmFile.length()} bytes)")
                             hmmFile.readText(Charsets.UTF_8)
@@ -174,6 +216,7 @@ class DashboardActivity : ComponentActivity() {
                             return@execute
                         }
                     }
+                    val jsonContent = mergePendingRetroactiveLabelIntoPayload(jsonContentRaw)
 
                     if (jsonContent.isBlank() || jsonContent == "{}" || jsonContent.contains("\"error\"")) {
                         handler.post {

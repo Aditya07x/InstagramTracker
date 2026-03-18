@@ -110,12 +110,33 @@ function DashboardToday({ data }) {
     const [retroactiveOverrides, setRetroactiveOverrides] = useState({});
 
     useEffect(() => {
-        // Registered by DashboardActivity.drainPendingRetroactiveLabel() on onResume.
+        // Registered by DashboardActivity.drainPendingRetroactiveLabel() / MainActivity.
         // The payload is a Base64-encoded JSON string from RetroactiveSurveyActivity.
         window.onRetroactiveLabelComplete = (b64) => {
             try {
                 const label = JSON.parse(atob(b64));
                 const key = String(label.sessionNum);
+                const date = String(label.date || "");
+                // Persist a window-scoped cache so that even if the native
+                // dashboard payload is briefly stale, the UI will continue to
+                // show the retroactive survey metrics instead of reverting.
+                try {
+                    const cacheKey = `${key}|${date}`;
+                    window.__retroactiveLabelCache = window.__retroactiveLabelCache || {};
+                    window.__retroactiveLabelCache[cacheKey] = {
+                        postSessionRating:  label.postSessionRating ?? 0,
+                        regretScore:        label.regretScore ?? 0,
+                        moodAfter:          label.moodAfter ?? 0,
+                        moodBefore:         label.moodBefore ?? 0,
+                        intendedAction:     label.intendedAction ?? "",
+                        comparativeRating:  label.comparativeRating ?? 0,
+                        delayedRegretScore: label.delayedRegretScore ?? 0,
+                        hasSurvey:          true,
+                        retroactiveLabel:   true,
+                    };
+                } catch (cacheErr) {
+                    console.warn('retroactive label cache update failed:', cacheErr);
+                }
                 setRetroactiveOverrides((prev) => ({ ...prev, [key]: label }));
             } catch (e) {
                 console.error('onRetroactiveLabelComplete parse error:', e);
@@ -257,7 +278,16 @@ function DashboardToday({ data }) {
                             // Apply any retroactive label that was submitted this session
                             const override = retroactiveOverrides[String(rawSel._sessionNum)] ?? null;
                             const sel = override ? { ...rawSel, ...override } : rawSel;
-                            const hasSurvey = sel.hasSurvey || (maybeNum(sel.postSessionRating) > 0);
+                            // Combine backend flag with the presence of at least one
+                            // core survey metric. This prevents stale or legacy
+                            // hasSurvey=true values (with all-zero fields) from
+                            // hiding the retroactive survey option.
+                            const hasCoreSurveyMetric =
+                                (maybeNum(sel.postSessionRating) > 0) ||
+                                (maybeNum(sel.regretScore) > 0) ||
+                                (maybeNum(sel.moodAfter) > 0) ||
+                                (maybeNum(sel.comparativeRating) > 0);
+                            const hasSurvey = sel.hasSurvey === true && hasCoreSurveyMetric;
                             return (
                                 <div style={{ marginTop: 10 }}>
                                     <div style={{ fontSize: 12, color: D.muted }}>
@@ -278,6 +308,11 @@ function DashboardToday({ data }) {
                                             {maybeNum(sel.moodAfter) > 0 && (
                                                 <span style={{ fontSize: 10, fontWeight: 700, padding: '3px 8px', borderRadius: 8, background: '#EEE9F5', color: '#6B3FA0' }}>
                                                     Mood {sel.moodAfter}/5
+                                                </span>
+                                            )}
+                                            {maybeNum(sel.comparativeRating) > 0 && (
+                                                <span style={{ fontSize: 10, fontWeight: 700, padding: '3px 8px', borderRadius: 8, background: '#F5F0E2', color: '#9A7020' }}>
+                                                    Experience {sel.comparativeRating}/5
                                                 </span>
                                             )}
                                             {sel.intendedAction && sel.intendedAction !== "0" && sel.intendedAction !== "0.0" && (
@@ -313,7 +348,7 @@ function DashboardToday({ data }) {
                                             </div>
                                         )}
 
-                                            {sel.hasSurvey && (
+                                            {hasSurvey && (
                                                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8 }}>
                                                     <div style={{ padding: '4px 10px', background: 'rgba(58,158,111,0.1)', border: '1px solid rgba(58,158,111,0.2)', borderRadius: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
                                                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#3A9E6F" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
@@ -326,7 +361,7 @@ function DashboardToday({ data }) {
                                                 </div>
                                             )}
 
-                                            {sel._sessionNum != null && sel._sessionDate && !sel.hasSurvey && (
+                                            {sel._sessionNum != null && sel._sessionDate && !hasSurvey && (
                                                 <button
                                                     onClick={() => {
                                                         const predSummary = sel.isDoom !== undefined
@@ -436,6 +471,7 @@ function DashboardWeek({ data }) {
 
     const weeklyTrendData = heat.slice(-7).map((d, i) => ({
         day: d.dayLabel || ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"][i],
+        dateLabel: d.dateLabel || d.date || "",
         score: Math.round(safeNum(d.avgCapture, 0) * 100),
         index: i
     }));
@@ -502,7 +538,8 @@ function DashboardWeek({ data }) {
                                     const heatData = heat.map((d, i) => {
                                         const rawVal = safeNum(d.avgCapture, 0) * 100;
                                         return {
-                                            day: dayNames[i % 7],
+                                            day: d.dayLabel || dayNames[i % 7],
+                                            dateLabel: d.dateLabel || d.date || "",
                                             value: Math.round(rawVal),
                                             sessions: maybeNum(d.sessionCount),
                                             raw: rawVal
@@ -533,7 +570,10 @@ function DashboardWeek({ data }) {
                                                     return [`${v}% autopilot - ${isFiniteNumber(sessions) ? sessions + ' session' + (sessions !== 1 ? 's' : '') : 'N/A'}`, 'Risk'];
                                                 }}
                                                 labelStyle={{ color: D.muted, fontWeight: 700 }}
-                                                labelFormatter={(label) => label}
+                                                labelFormatter={(label, payload) => {
+                                                    const first = safeArr(payload)[0]?.payload;
+                                                    return first?.dateLabel ? `${label} · ${first.dateLabel}` : label;
+                                                }}
                                             />
                                             <ReferenceLine 
                                                 y={avgVal} 
@@ -561,7 +601,7 @@ function DashboardWeek({ data }) {
                         </div>
                         {selectedDay && (
                             <div style={{ marginTop: 12, padding: "8px 10px", background: "rgba(107,63,160,0.08)", borderLeft: `3px solid ${D.info}`, color: D.muted, fontSize: 12, borderRadius: 4 }}>
-                                <strong>{selectedDay.day}:</strong> {Math.round(selectedDay.raw)}% autopilot · {isFiniteNumber(maybeNum(selectedDay.sessions)) ? selectedDay.sessions + " session" + (selectedDay.sessions !== 1 ? "s" : "") : "N/A"}
+                                <strong>{selectedDay.day}{selectedDay.dateLabel ? ` · ${selectedDay.dateLabel}` : ""}:</strong> {Math.round(selectedDay.raw)}% autopilot · {isFiniteNumber(maybeNum(selectedDay.sessions)) ? selectedDay.sessions + " session" + (selectedDay.sessions !== 1 ? "s" : "") : "N/A"}
                             </div>
                         )}
                     </>
@@ -746,76 +786,102 @@ function DashboardAllTime({ data }) {
                 {(() => {
                     const c2d = maybeNum(data.stateDynamics?.casualToDoomProb);
                     const d2c = maybeNum(data.stateDynamics?.doomToCasualProb);
+                    const clampProb = (p) => isFiniteNumber(p) ? Math.max(0, Math.min(1, p)) : 0;
+                    const c2dProb = clampProb(c2d);
+                    const d2cProb = clampProb(d2c);
+                    const c2cProb = isFiniteNumber(c2d) ? clampProb(1 - c2d) : 0;
+                    const d2dProb = isFiniteNumber(d2c) ? clampProb(1 - d2c) : 0;
                     const c2dPct = isFiniteNumber(c2d) ? `${Math.round(c2d * 100)}%` : '--';
                     const d2cPct = isFiniteNumber(d2c) ? `${Math.round(d2c * 100)}%` : '--';
                     const c2cPct = isFiniteNumber(c2d) ? `${Math.round((1 - c2d) * 100)}%` : '--';
                     const d2dPct = isFiniteNumber(d2c) ? `${Math.round((1 - d2c) * 100)}%` : '--';
+                    const flowDuration = (p, slow = 4.8, fast = 2.1) => `${(slow - ((slow - fast) * p)).toFixed(2)}s`;
+                    const laneWidth = (p, min = 2.5, max = 6) => (min + (max - min) * p).toFixed(2);
+                    const laneOpacity = (p, min = 0.22, max = 0.88) => (min + (max - min) * p).toFixed(2);
+                    const nodeHalo = (p) => (0.12 + (0.18 * p)).toFixed(2);
                     return (
                 <div style={{ marginBottom: 8 }}>
                     <style>{`
-                        @keyframes dotMoveForward {
-                            0%   { offset-distance: 0%; opacity: 0; }
-                            10%  { opacity: 1; }
-                            90%  { opacity: 1; }
-                            100% { offset-distance: 100%; opacity: 0; }
+                        @keyframes flowTravel {
+                            0%   { offset-distance: 0%; opacity: 0; transform: scale(0.86); }
+                            12%  { opacity: 1; transform: scale(1); }
+                            88%  { opacity: 1; transform: scale(1); }
+                            100% { offset-distance: 100%; opacity: 0; transform: scale(0.86); }
                         }
-                        @keyframes dotMoveBack {
+                        @keyframes loopTravel {
                             0%   { offset-distance: 0%; opacity: 0; }
-                            10%  { opacity: 1; }
-                            90%  { opacity: 1; }
-                            100% { offset-distance: 100%; opacity: 0; }
-                        }
-                        @keyframes dotMoveLoop {
-                            0%   { offset-distance: 0%; opacity: 0; }
-                            10%  { opacity: 1; }
-                            90%  { opacity: 1; }
+                            15%  { opacity: 0.95; }
+                            85%  { opacity: 0.95; }
                             100% { offset-distance: 100%; opacity: 0; }
                         }
                         @keyframes pulseNode {
                             0%, 100% { transform: scale(1); }
-                            50% { transform: scale(1.04); }
+                            50% { transform: scale(1.03); }
+                        }
+                        @keyframes pulseLane {
+                            0%, 100% { opacity: 0.55; }
+                            50% { opacity: 1; }
                         }
                     `}</style>
                     <svg width="100%" viewBox="0 0 320 160">
+                        <defs>
+                            <filter id="laneGlow" x="-50%" y="-50%" width="200%" height="200%">
+                                <feGaussianBlur stdDeviation="3.2" result="blur" />
+                                <feMerge>
+                                    <feMergeNode in="blur" />
+                                    <feMergeNode in="SourceGraphic" />
+                                </feMerge>
+                            </filter>
+                        </defs>
                         {/* Self-loop: Mindful → Mindful */}
-                        <path d="M 56 36 C 34 14 106 14 84 36" fill="none" stroke={D.safe} strokeWidth="1.25" strokeDasharray="4 2" />
+                        <path d="M 56 36 C 34 14 106 14 84 36" fill="none" stroke={D.safe} strokeOpacity={laneOpacity(c2cProb, 0.18, 0.45)} strokeWidth={laneWidth(c2cProb, 1.3, 2.6)} strokeDasharray="4 3" />
                         <polygon points="84,36 80,30 87,31" fill={D.safe} />
                         <text x="70" y="8" textAnchor="middle" fontFamily="Space Mono" fontSize="10" fontWeight="700" fill={D.safe}>{c2cPct}</text>
-                        <circle r="2.25" fill={D.safe} style={{ offsetPath: "path('M 56 36 C 34 14 106 14 84 36')", animation: 'dotMoveLoop 3.2s ease-in-out 0.3s infinite' }} />
+                        <text x="70" y="20" textAnchor="middle" fontFamily="Nunito" fontSize="9" fontWeight="800" fill={D.safe} opacity="0.75">stay mindful</text>
+                        <circle r={2.1 + (c2cProb * 1.1)} fill={D.safe} style={{ offsetPath: "path('M 56 36 C 34 14 106 14 84 36')", animation: `loopTravel ${flowDuration(c2cProb, 4.8, 2.8)} linear 0.2s infinite` }} />
 
                         {/* Self-loop: Autopilot → Autopilot */}
-                        <path d="M 236 36 C 214 14 286 14 264 36" fill="none" stroke={D.danger} strokeWidth="1.25" strokeDasharray="4 2" />
+                        <path d="M 236 36 C 214 14 286 14 264 36" fill="none" stroke={D.danger} strokeOpacity={laneOpacity(d2dProb, 0.18, 0.45)} strokeWidth={laneWidth(d2dProb, 1.3, 2.6)} strokeDasharray="4 3" />
                         <polygon points="264,36 260,30 267,31" fill={D.danger} />
                         <text x="250" y="8" textAnchor="middle" fontFamily="Space Mono" fontSize="10" fontWeight="700" fill={D.danger}>{d2dPct}</text>
-                        <circle r="2.25" fill={D.danger} style={{ offsetPath: "path('M 236 36 C 214 14 286 14 264 36')", animation: 'dotMoveLoop 3.6s ease-in-out 1s infinite' }} />
+                        <text x="250" y="20" textAnchor="middle" fontFamily="Nunito" fontSize="9" fontWeight="800" fill={D.danger} opacity="0.75">stay autopilot</text>
+                        <circle r={2.1 + (d2dProb * 1.1)} fill={D.danger} style={{ offsetPath: "path('M 236 36 C 214 14 286 14 264 36')", animation: `loopTravel ${flowDuration(d2dProb, 4.9, 2.7)} linear 0.8s infinite` }} />
 
                         {/* Mindful node */}
                         <g style={{ animation: 'pulseNode 3s ease-in-out infinite' }}>
-                            <circle cx="70" cy="88" r="38" fill="rgba(58,158,111,0.10)" stroke={D.safe} strokeWidth="2" />
+                            <circle cx="70" cy="88" r="43" fill={`rgba(58,158,111,${nodeHalo(c2cProb)})`} />
+                            <circle cx="70" cy="88" r="38" fill="rgba(58,158,111,0.10)" stroke={D.safe} strokeWidth="2.2" />
                             <text x="70" y="83" textAnchor="middle" fontFamily="Space Grotesk" fontSize="11" fontWeight="800" fill={D.safe}>Mindful</text>
                             <text x="70" y="97" textAnchor="middle" fontFamily="Space Grotesk" fontSize="11" fontWeight="800" fill={D.safe}>Browsing</text>
                         </g>
                         {/* Autopilot node */}
                         <g style={{ animation: 'pulseNode 3s ease-in-out 1.5s infinite' }}>
-                            <circle cx="250" cy="88" r="38" fill="rgba(196,86,58,0.10)" stroke={D.danger} strokeWidth="2" />
+                            <circle cx="250" cy="88" r="43" fill={`rgba(196,86,58,${nodeHalo(d2dProb)})`} />
+                            <circle cx="250" cy="88" r="38" fill="rgba(196,86,58,0.10)" stroke={D.danger} strokeWidth="2.2" />
                             <text x="250" y="91" textAnchor="middle" fontFamily="Space Grotesk" fontSize="11" fontWeight="800" fill={D.danger}>Autopilot</text>
                         </g>
                         {/* Forward arrow: Mindful → Autopilot */}
-                        <path id="pathForward" d="M 110 70 Q 160 41 210 70" fill="none" stroke={D.danger} strokeWidth="2.5" />
+                        <path d="M 110 70 Q 160 41 210 70" fill="none" stroke={D.danger} strokeOpacity={laneOpacity(c2dProb, 0.16, 0.28)} strokeWidth={laneWidth(c2dProb, 5.5, 10)} filter="url(#laneGlow)" style={{ animation: 'pulseLane 2.6s ease-in-out infinite' }} />
+                        <path id="pathForward" d="M 110 70 Q 160 41 210 70" fill="none" stroke={D.danger} strokeOpacity={laneOpacity(c2dProb, 0.45, 1)} strokeWidth={laneWidth(c2dProb, 2.4, 5.6)} strokeLinecap="round" />
                         <polygon points="210,70 201,64 204,74" fill={D.danger} />
                         {/* Forward percentage label */}
-                        <text x="160" y="50" textAnchor="middle" fontFamily="Space Mono" fontSize="11" fontWeight="800" fill={D.danger}>{c2dPct}</text>
+                        <text x="160" y="36" textAnchor="middle" fontFamily="Space Mono" fontSize="11" fontWeight="800" fill={D.danger}>{c2dPct}</text>
+                        <text x="160" y="24" textAnchor="middle" fontFamily="Nunito" fontSize="9" fontWeight="800" fill={D.danger} opacity="0.78">slip into autopilot</text>
                         {/* Moving dot: Mindful → Autopilot */}
-                        <circle r="4" fill={D.danger} style={{ offsetPath: "path('M 110 70 Q 160 41 210 70')", animation: 'dotMoveForward 2.8s ease-in-out infinite' }} />
-                        <circle r="4" fill={D.danger} opacity="0.5" style={{ offsetPath: "path('M 110 70 Q 160 41 210 70')", animation: 'dotMoveForward 2.8s ease-in-out 1.4s infinite' }} />
+                        <circle r={3.2 + (c2dProb * 1.8)} fill={D.danger} style={{ offsetPath: "path('M 110 70 Q 160 41 210 70')", animation: `flowTravel ${flowDuration(c2dProb, 4.6, 2.2)} linear infinite` }} />
                         {/* Return arrow: Autopilot → Mindful */}
-                        <path id="pathBack" d="M 210 106 Q 160 135 110 106" fill="none" stroke={D.safe} strokeWidth="2" strokeDasharray="5 3" />
+                        <path d="M 210 106 Q 160 135 110 106" fill="none" stroke={D.safe} strokeOpacity={laneOpacity(d2cProb, 0.16, 0.28)} strokeWidth={laneWidth(d2cProb, 5, 9)} filter="url(#laneGlow)" style={{ animation: 'pulseLane 2.9s ease-in-out 0.5s infinite' }} />
+                        <path id="pathBack" d="M 210 106 Q 160 135 110 106" fill="none" stroke={D.safe} strokeOpacity={laneOpacity(d2cProb, 0.45, 1)} strokeWidth={laneWidth(d2cProb, 2.2, 5.2)} strokeLinecap="round" strokeDasharray="5 3" />
                         <polygon points="110,106 119,100 117,111" fill={D.safe} />
                         {/* Return percentage label */}
                         <text x="160" y="148" textAnchor="middle" fontFamily="Space Mono" fontSize="11" fontWeight="800" fill={D.safe}>{d2cPct}</text>
+                        <text x="160" y="136" textAnchor="middle" fontFamily="Nunito" fontSize="9" fontWeight="800" fill={D.safe} opacity="0.78">recover to mindful</text>
                         {/* Moving dot: Autopilot → Mindful */}
-                        <circle r="3.5" fill={D.safe} style={{ offsetPath: "path('M 210 106 Q 160 135 110 106')", animation: 'dotMoveBack 3.4s ease-in-out 0.6s infinite' }} />
+                        <circle r={3.2 + (d2cProb * 1.8)} fill={D.safe} style={{ offsetPath: "path('M 210 106 Q 160 135 110 106')", animation: `flowTravel ${flowDuration(d2cProb, 4.6, 2.2)} linear 0.6s infinite` }} />
                     </svg>
+                    <div style={{ marginTop: 10, fontSize: 11, color: D.muted, lineHeight: 1.45 }}>
+                        Dot speed reflects how often the switch happens. Lane thickness shows how strong that transition is.
+                    </div>
                 </div>
                     );
                 })()}

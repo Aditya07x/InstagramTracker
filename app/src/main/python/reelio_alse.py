@@ -170,7 +170,8 @@ def compute_supervised_doom_label(
     delayed_regret: float = 0.0,
     comparative_rating: float = 0.0,
     post_session_rating: float = 0.0,
-    intended_action: str = ""
+    intended_action: str = "",
+    actual_vs_intended_match: float = 2.0
 ) -> float:
     """
     Compute a supervised doom target in [0, 1] using the shared priority chain:
@@ -213,6 +214,18 @@ def compute_supervised_doom_label(
     else:
         label_score = imm
 
+    try:
+        match_val = int(float(actual_vs_intended_match))
+    except Exception:
+        match_val = 2
+
+    # Intent mismatch is a useful secondary supervision signal, but it is not
+    # independent enough to dominate the label hierarchy above.
+    if match_val == 0:
+        label_score = min(1.0, label_score + 0.10)
+    elif match_val == 1 and label_score > 0:
+        label_score = max(0.0, label_score - 0.04)
+
     if str(intended_action) in ("Stressed / Avoidance", "Bored / Nothing to do", "Procrastinating something"):
         label_score = min(1.0, label_score + 0.25)
 
@@ -238,6 +251,29 @@ def effective_session_reel_count(df: pd.DataFrame) -> int:
             return max(1, int(cr.nunique()))
 
     return max(1, int(len(df)))
+
+
+def compute_session_behavior_evidence(df: pd.DataFrame) -> float:
+    """
+    Estimate how much within-session evidence we have before contextual heuristics
+    are allowed to dominate doom scoring. Very short sessions should not cross the
+    doom threshold mainly because they happened late at night.
+    """
+    if df is None or len(df) == 0:
+        return 0.0
+
+    n_reels = max(1, effective_session_reel_count(df))
+
+    if 'DwellTime' in df.columns:
+        total_dwell = float(pd.to_numeric(df['DwellTime'], errors='coerce').fillna(0.0).sum())
+    elif 'log_dwell' in df.columns:
+        total_dwell = float(np.exp(pd.to_numeric(df['log_dwell'], errors='coerce').fillna(0.0)).sum())
+    else:
+        total_dwell = float(n_reels) * 4.0
+
+    reel_evidence = min(n_reels / 8.0, 1.0)
+    duration_evidence = min(total_dwell / 120.0, 1.0)
+    return float(np.clip(max(reel_evidence, duration_evidence), 0.0, 1.0))
 
 
 def dedupe_session_rows(df: pd.DataFrame, session_id: str = "unknown") -> pd.DataFrame:
@@ -318,7 +354,8 @@ def preprocess_session(df):
             delayed_regret=float(df['DelayedRegretScore'].iloc[0]) if 'DelayedRegretScore' in df.columns else 0.0,
             comparative_rating=float(df['ComparativeRating'].iloc[0]) if 'ComparativeRating' in df.columns else 0.0,
             post_session_rating=float(df['PostSessionRating'].iloc[0]) if 'PostSessionRating' in df.columns else 0.0,
-            intended_action=str(df['IntendedAction'].iloc[0]) if 'IntendedAction' in df.columns else ""
+            intended_action=str(df['IntendedAction'].iloc[0]) if 'IntendedAction' in df.columns else "",
+            actual_vs_intended_match=float(df['ActualVsIntendedMatch'].iloc[0]) if 'ActualVsIntendedMatch' in df.columns else 2.0
         )
     
     # Intent-behavior mismatch signal
@@ -728,6 +765,7 @@ class DoomScorer:
             return {'doom_score': 0.0, 'label': 'CASUAL', 'components': {}}
             
         n_reels = max(1, effective_session_reel_count(session_df))
+        behavior_evidence = compute_session_behavior_evidence(session_df)
         
         c_length = min(n_reels / max(1.0, baseline.session_len_mu + 2 * baseline.session_len_sig), 1.0)
         
@@ -785,9 +823,10 @@ class DoomScorer:
 
         # A long gap during the sleep window is NOT healthy recovery —
         # it just means they put the phone down for a bit then came back at 2AM.
-        # Don't give c_rapid=0.0 credit in that scenario.
+        # Don't give c_rapid=0.0 credit in that scenario, but also don't let a
+        # very short session inherit a strong penalty with little behavioral evidence.
         if in_sleep_window and gap_min > 60:
-            c_rapid = max(c_rapid, 0.25)
+            c_rapid = max(c_rapid, 0.25 * behavior_evidence)
 
         dark_frac  = session_df['IsScreenInDarkRoom'].mean() if 'IsScreenInDarkRoom' in session_df.columns else float(lux < 15)
         is_dark_rm = 1.0 if (dark_frac > 0.5 and (phase > 0.75 or phase < 0.25)) else 0.0
@@ -803,6 +842,9 @@ class DoomScorer:
         # Environment risk is absolute, not conditioned on previous state.
         # Late night scrolling in a dark room is RISKY regardless of if you were casual 10 mins ago.
         c_env = float(np.clip(c_env_base, 0.0, 1.0))
+        context_evidence_scale = 0.35 + 0.65 * behavior_evidence
+        c_rapid *= context_evidence_scale
+        c_env *= context_evidence_scale
         
         w = self.component_weights
         c_vec = np.array([
@@ -813,7 +855,7 @@ class DoomScorer:
 
         # Late night context multiplier — environment amplifies risk, not just adds to it
         if in_sleep_window and c_env >= 0.45:
-            ds = float(np.clip(ds * 1.25, 0.0, 1.0))
+            ds = float(np.clip(ds * (1.0 + 0.25 * behavior_evidence), 0.0, 1.0))
 
         # Hard floor: 2+ exit attempts means the user tried to leave and couldn't.
         # That's a capture signal regardless of everything else. Floor at 0.35.
@@ -1520,6 +1562,7 @@ class ReelioCLSE:
             'RegretScore': float(df['RegretScore'].iloc[0]) if 'RegretScore' in df.columns else 0.0,
             'ComparativeRating': float(df['ComparativeRating'].iloc[0]) if 'ComparativeRating' in df.columns else 0.0,
             'DelayedRegretScore': float(df['DelayedRegretScore'].iloc[0]) if 'DelayedRegretScore' in df.columns else 0.0,
+            'ActualVsIntendedMatch': float(df['ActualVsIntendedMatch'].iloc[0]) if 'ActualVsIntendedMatch' in df.columns else 2.0,
             'IntendedAction': intended
         }
         
@@ -1806,6 +1849,7 @@ def apply_delayed_label(state_path: str, delayed_regret: int, comparative: int) 
         snapshot = model.last_label_snapshot if isinstance(getattr(model, 'last_label_snapshot', {}), dict) else {}
         post_raw = float(snapshot.get('PostSessionRating', 0.0) or 0.0)
         imm_raw = float(snapshot.get('RegretScore', 0.0) or 0.0)
+        match_raw = float(snapshot.get('ActualVsIntendedMatch', 2.0) or 2.0)
         intended = str(snapshot.get('IntendedAction', '') or '')
 
         # Use the exact same label-priority chain as preprocess_session.
@@ -1814,7 +1858,8 @@ def apply_delayed_label(state_path: str, delayed_regret: int, comparative: int) 
             delayed_regret=float(delayed_regret),
             comparative_rating=float(comparative),
             post_session_rating=post_raw,
-            intended_action=intended
+            intended_action=intended,
+            actual_vs_intended_match=match_raw
         )
 
         # Label confidence follows the same hierarchy semantics.
@@ -2099,6 +2144,49 @@ def run_dashboard_payload(csv_data: str, state_path: str = None, survey_data: di
     if 'SessionNum' not in df.columns:
         return json.dumps({"error": "Schema missing SessionNum", "sessions": []})
 
+    # retroactive_label_map:
+    #   key   = (sessionNum, date)  OR  (_rawSessionNum, raw_date)
+    #   value = dict of survey fields from the last cached HMM payload
+    #           (postSessionRating, regretScore, moodBefore, moodAfter,
+    #            intendedAction, actualVsIntended, comparativeRating,
+    #            delayedRegretScore, hasSurvey, retroactiveLabel).
+    retroactive_label_map = {}
+    if state_path:
+        try:
+            hmm_cache_path = os.path.join(os.path.dirname(state_path), "hmm_results.json")
+            if os.path.exists(hmm_cache_path):
+                previous_root = json.loads(open(hmm_cache_path, "r", encoding="utf-8").read())
+                previous_sessions = previous_root.get("sessions", []) if isinstance(previous_root, dict) else []
+                for sess in previous_sessions:
+                    if not isinstance(sess, dict):
+                        continue
+                    if not bool(sess.get("retroactiveLabel", False)):
+                        continue
+                    # Extract the most recent survey label payload for this session.
+                    label_payload = {
+                        "postSessionRating":  int(sess.get("postSessionRating", 0) or 0),
+                        "regretScore":        int(sess.get("regretScore", 0) or 0),
+                        "moodBefore":         int(sess.get("moodBefore", 0) or 0),
+                        "moodAfter":          int(sess.get("moodAfter", 0) or 0),
+                        "intendedAction":     str(sess.get("intendedAction", "") or ""),
+                        "actualVsIntended":   int(sess.get("actualVsIntended", 0) or 0),
+                        "comparativeRating":  int(sess.get("comparativeRating", 0) or 0),
+                        "delayedRegretScore": int(sess.get("delayedRegretScore", 0) or 0),
+                        "hasSurvey":          bool(sess.get("hasSurvey", False)),
+                        "retroactiveLabel":   True,
+                    }
+                    raw_num = str(sess.get("_rawSessionNum", "")).strip()
+                    raw_start = str(sess.get("_rawStartTime", "")).strip()
+                    raw_date = raw_start[:10] if len(raw_start) >= 10 else ""
+                    sess_num = str(sess.get("sessionNum", "")).strip()
+                    sess_date = str(sess.get("date", "")).strip()
+                    if raw_num and raw_date:
+                        retroactive_label_map[(raw_num, raw_date)] = label_payload
+                    if sess_num and sess_date:
+                        retroactive_label_map[(sess_num, sess_date)] = label_payload
+        except Exception:
+            retroactive_label_map = {}
+
     df['_session_key'] = df.apply(make_session_key, axis=1)
     session_list = sorted(
         df.groupby('_session_key'),
@@ -2145,15 +2233,17 @@ def run_dashboard_payload(csv_data: str, state_path: str = None, survey_data: di
             # Internal learning uses blended probability
             gap_min = float(s_df['TimeSinceLastSessionMin'].iloc[0]) if 'TimeSinceLastSessionMin' in s_df.columns else 60.0
             scorer_result = scorer.score(s_df, baseline, gap_min, prev_S_t=blended_prob)
+            behavior_evidence = compute_session_behavior_evidence(s_df)
             
             # When model confidence is low, blend heuristic into displayed score.
             # This prevents near-zero S_t from hiding clearly bad sessions.
             _model_conf = model.compute_model_confidence_breakdown()['overall']
             _heuristic  = scorer_result.get('doom_score', 0.0)
             if _model_conf < 0.70:
-                # Weight shifts toward heuristic as confidence drops
-                _w_hmm  = _model_conf
-                _w_heus = 1.0 - _model_conf
+                # Weight shifts toward heuristic as confidence drops, but short sessions
+                # still need enough within-session evidence before context can dominate.
+                _w_heus = (1.0 - _model_conf) * behavior_evidence
+                _w_hmm  = 1.0 - _w_heus
                 S_t_reported = float(np.clip(
                     _w_hmm * doom_prob + _w_heus * _heuristic, 0.0, 1.0
                 ))
@@ -2169,7 +2259,7 @@ def run_dashboard_payload(csv_data: str, state_path: str = None, survey_data: di
                 _in_sleep = (_hour >= _sleep_start) or (_hour < _sleep_end) if _sleep_start > _sleep_end else (_sleep_start <= _hour < _sleep_end)
             except:
                 _in_sleep = False
-            if _in_sleep and _heuristic >= 0.50:
+            if _in_sleep and _heuristic >= 0.50 and behavior_evidence >= 0.60:
                 S_t_reported = max(S_t_reported, 0.25)
             scorer.update_weights(scorer_result['components'], blended_prob)
             
@@ -2225,7 +2315,8 @@ def run_dashboard_payload(csv_data: str, state_path: str = None, survey_data: di
                 except Exception:
                     end_time_str = str(s_df['EndTime'].iloc[-1])
             
-            results.append({
+            # Base session payload derived from CSV + model inference
+            base_obj = {
                 "sessionNum":          str(len(results) + 1),
                 "_rawSessionNum":      int(s_df['SessionNum'].iloc[0]) if 'SessionNum' in s_df.columns else 0,
                 "_rawStartTime":       str(s_df['StartTime'].iloc[0]) if 'StartTime' in s_df.columns else "Unknown",
@@ -2260,10 +2351,55 @@ def run_dashboard_payload(csv_data: str, state_path: str = None, survey_data: di
                 "comparativeRating":   int(s_df['ComparativeRating'].iloc[0])    if 'ComparativeRating'   in s_df.columns and pd.notna(s_df['ComparativeRating'].iloc[0])    else 0,
                 "delayedRegretScore":  int(s_df['DelayedRegretScore'].iloc[0])   if 'DelayedRegretScore'  in s_df.columns and pd.notna(s_df['DelayedRegretScore'].iloc[0])   else 0,
                 "supervisedDoom":      round(float(s_df['supervised_doom'].iloc[0]), 4) if 'supervised_doom' in s_df.columns else 0.0,
-                "hasSurvey":           bool(('RegretScore' in s_df.columns and pd.notna(s_df['RegretScore'].iloc[0]) and float(s_df['RegretScore'].iloc[0]) > 0) or 
-                                            ('PostSessionRating' in s_df.columns and pd.notna(s_df['PostSessionRating'].iloc[0]) and float(s_df['PostSessionRating'].iloc[0]) > 0) or
-                                            ('MoodAfter' in s_df.columns and pd.notna(s_df['MoodAfter'].iloc[0]) and float(s_df['MoodAfter'].iloc[0]) > 0))
-            })
+            }
+
+            # Default hasSurvey computation from CSV-only fields.
+            base_has_survey = bool(
+                ('RegretScore' in s_df.columns and pd.notna(s_df['RegretScore'].iloc[0]) and float(s_df['RegretScore'].iloc[0]) > 0) or
+                ('PostSessionRating' in s_df.columns and pd.notna(s_df['PostSessionRating'].iloc[0]) and float(s_df['PostSessionRating'].iloc[0]) > 0) or
+                ('MoodAfter' in s_df.columns and pd.notna(s_df['MoodAfter'].iloc[0]) and float(s_df['MoodAfter'].iloc[0]) > 0) or
+                ('ComparativeRating' in s_df.columns and pd.notna(s_df['ComparativeRating'].iloc[0]) and float(s_df['ComparativeRating'].iloc[0]) > 0)
+            )
+            base_obj["hasSurvey"] = base_has_survey
+
+            # Look for a retroactive label snapshot for this session, either by
+            # raw (SessionNum, StartTime date) or by (sessionNum, date) as seen
+            # in the cached HMM payload.
+            raw_key = (
+                str(base_obj["_rawSessionNum"] or ""),
+                str(base_obj["_rawStartTime"] or "")[:10]
+            )
+            logical_key = (
+                str(base_obj["sessionNum"] or ""),
+                str(base_obj["date"] or "")
+            )
+            retro_label = retroactive_label_map.get(raw_key) or retroactive_label_map.get(logical_key)
+
+            if isinstance(retro_label, dict):
+                # Overlay survey fields from the cached retroactive label so that
+                # dashboard payload is consistent immediately after labeling,
+                # even if the CSV mapping has not yet been updated.
+                for fld in [
+                    "postSessionRating",
+                    "regretScore",
+                    "moodBefore",
+                    "moodAfter",
+                    "intendedAction",
+                    "actualVsIntended",
+                    "comparativeRating",
+                    "delayedRegretScore",
+                ]:
+                    if fld in retro_label:
+                        base_obj[fld] = retro_label[fld]
+                base_obj["hasSurvey"] = bool(retro_label.get("hasSurvey", True))
+                base_obj["retroactiveLabel"] = True
+            else:
+                base_obj["retroactiveLabel"] = bool(
+                    retroactive_label_map.get(raw_key, False) or
+                    retroactive_label_map.get(logical_key, False)
+                )
+
+            results.append(base_obj)
             
             p_capture_timeline.extend(gamma[:, 1].round(3).tolist())
             

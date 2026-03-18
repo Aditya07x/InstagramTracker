@@ -25,6 +25,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
@@ -47,6 +48,28 @@ class MainActivity : ComponentActivity() {
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // One-time cache invalidation for updated hasSurvey semantics.
+        // Older hmm_results.json payloads may still mark sessions as "surveyed"
+        // based solely on delayed-regret fields. Bump this version if the
+        // backend survey schema changes again in the future.
+        try {
+            val prefs = getSharedPreferences("InstaTrackerPrefs", Context.MODE_PRIVATE)
+            val currentSchemaVersion = prefs.getInt("dashboard_schema_version", 0)
+            val requiredSchemaVersion = 1
+            if (currentSchemaVersion < requiredSchemaVersion) {
+                // Force regeneration of dashboard payload with latest Python logic.
+                listOf("hmm_results.json").forEach { name ->
+                    File(filesDir, name).takeIf { it.exists() }?.delete()
+                }
+                prefs.edit()
+                    .putInt("dashboard_schema_version", requiredSchemaVersion)
+                    .apply()
+                Log.d("MainActivity", "Dashboard schema bump -> invalidated cached hmm_results.json")
+            }
+        } catch (e: Exception) {
+            Log.w("MainActivity", "Schema bump cache invalidation failed: ${e.message}")
+        }
 
         // Request Notification Permission (Android 13+)
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
@@ -146,7 +169,7 @@ class MainActivity : ComponentActivity() {
             val cachedFile = File(filesDir, "hmm_results.json")
             if (cachedFile.exists() && cachedFile.length() > 50) {
                 try {
-                    val cachedJson = cachedFile.readText()
+                    val cachedJson = mergePendingRetroactiveLabelIntoPayload(cachedFile.readText())
                     val b64 = android.util.Base64.encodeToString(
                         cachedJson.toByteArray(Charsets.UTF_8),
                         android.util.Base64.NO_WRAP
@@ -166,6 +189,45 @@ class MainActivity : ComponentActivity() {
                 // Background refresh with latest data
                 injectDataWithDebounce(webView)
             }
+        }
+    }
+
+    private fun mergePendingRetroactiveLabelIntoPayload(jsonContent: String): String {
+        val prefs = getSharedPreferences("InstaTrackerPrefs", Context.MODE_PRIVATE)
+        val b64 = prefs.getString("pending_retroactive_label_b64", null) ?: return jsonContent
+        val ts = prefs.getLong("pending_retroactive_label_ts", 0L)
+        if (System.currentTimeMillis() - ts > 5 * 60 * 1000L) return jsonContent
+
+        return try {
+            val label = JSONObject(String(android.util.Base64.decode(b64, android.util.Base64.DEFAULT), Charsets.UTF_8))
+            val root = JSONObject(jsonContent)
+            val sessionNum = label.optString("sessionNum", "")
+            val sessionDate = label.optString("date", "")
+            var patched = false
+
+            fun patchSessions(arr: JSONArray?) {
+                if (arr == null) return
+                for (i in 0 until arr.length()) {
+                    val sess = arr.optJSONObject(i) ?: continue
+                    val matchesNum = sess.optString("sessionNum", "") == sessionNum
+                    val matchesDate = sess.optString("date", "") == sessionDate
+                    if (!matchesNum || !matchesDate) continue
+                    val keys = label.keys()
+                    while (keys.hasNext()) {
+                        val key = keys.next()
+                        sess.put(key, label.get(key))
+                    }
+                    patched = true
+                }
+            }
+
+            patchSessions(root.optJSONArray("sessions"))
+            patchSessions(root.optJSONArray("todaySessions"))
+
+            if (patched) root.toString() else jsonContent
+        } catch (e: Exception) {
+            Log.w("ReactDashboard", "Failed to merge pending retroactive label into payload: ${e.message}")
+            jsonContent
         }
     }
 
@@ -232,6 +294,8 @@ class MainActivity : ComponentActivity() {
                             android.util.Log.i("ReelioDiag", "MainActivity releasing PYTHON_LOCK (dashboard_payload). time=${System.currentTimeMillis()}")
                         }
                     }
+
+                    jsonContent = mergePendingRetroactiveLabelIntoPayload(jsonContent)
 
                     if (jsonContent.isEmpty() || jsonContent == "{}" || jsonContent == "null") {
                         handler.post {
@@ -401,8 +465,9 @@ class MainActivity : ComponentActivity() {
          */
         @JavascriptInterface
         fun setSurveyFrequency(prob: Float) {
+            val bounded = prob.coerceIn(0f, 1f)
             mContext.getSharedPreferences("InstaTrackerPrefs", Context.MODE_PRIVATE)
-                .edit().putFloat("survey_probability", prob).apply()
+                .edit().putFloat("survey_probability", bounded).apply()
         }
 
         @JavascriptInterface

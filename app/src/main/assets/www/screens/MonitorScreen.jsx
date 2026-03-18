@@ -470,6 +470,7 @@ function RingCard({ data }) {
     });
 
     const N = 7;
+    const baselinePct = 100 / N;
     const SVG = 340;
     const cx = SVG / 2, cy = SVG / 2;
     const R = 115;
@@ -494,17 +495,27 @@ function RingCard({ data }) {
         return `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`;
     }).join(' ') + 'Z';
 
-    const sevColor = pct =>
-        pct >= 70 ? '#C4563A' :
-            pct >= 45 ? '#C4973A' :
-                pct >= 25 ? '#6B3FA0' :
+    const leadPct = Math.max(0, ...factors.map(f => f.pct));
+    const baselineWindow = Math.max(8, leadPct - baselinePct);
+    const signalScore = factor => {
+        if (!factor || factor.pct <= 0 || leadPct <= 0) return 0;
+        const aboveBaseline = Math.max(0, factor.pct - baselinePct);
+        const baselineComponent = Math.min(1, aboveBaseline / baselineWindow);
+        const leaderComponent = Math.min(1, factor.pct / Math.max(leadPct, baselinePct));
+        return Math.round(Math.min(100, (baselineComponent * 65) + (leaderComponent * 35)));
+    };
+
+    const sevColor = score =>
+        score >= 75 ? '#C4563A' :
+            score >= 45 ? '#C4973A' :
+                score >= 20 ? '#6B3FA0' :
                     '#3A9E6F';
 
-    const sevLabel = pct =>
-        pct >= 70 ? 'Critical' :
-            pct >= 45 ? 'Elevated' :
-                pct >= 25 ? 'Moderate' :
-                    'Healthy';
+    const sevLabel = score =>
+        score >= 75 ? 'Dominant' :
+            score >= 45 ? 'Active' :
+                score >= 20 ? 'Present' :
+                    'Background';
 
     const handleTap = i => setActive(prev => prev === i ? null : i);
     const af = active !== null ? factors[active] : null;
@@ -531,19 +542,19 @@ function RingCard({ data }) {
                         <div style={{
                             fontFamily: "'Nunito', sans-serif",
                             fontSize: 11, fontWeight: 700, color: '#9A8E84', marginTop: 2,
-                        }}>Tap a signal to explore</div>
+                        }}>Relative to your current attention mix</div>
                     </div>
                     {/* Driver alert count — how many signals are at risk */}
                     {(() => {
-                        const critN = factors.filter(f => f.pct >= 70).length;
-                        const elevN = factors.filter(f => f.pct >= 45 && f.pct < 70).length;
-                        const atRisk = critN + elevN;
-                        const badgeColor = critN > 0 ? '#C4563A' : elevN > 0 ? '#C4973A' : '#3A9E6F';
-                        const badgeBg = critN > 0 ? '#F5EDE9' : elevN > 0 ? '#F5F0E2' : '#EAF3EE';
+                        const dominantN = factors.filter(f => signalScore(f) >= 75).length;
+                        const activeN = factors.filter(f => signalScore(f) >= 45 && signalScore(f) < 75).length;
+                        const standoutN = dominantN + activeN;
+                        const badgeColor = dominantN > 0 ? '#C4563A' : activeN > 0 ? '#C4973A' : '#3A9E6F';
+                        const badgeBg = dominantN > 0 ? '#F5EDE9' : activeN > 0 ? '#F5F0E2' : '#EAF3EE';
                         return (
                             <div style={{ background: badgeBg, border: `1.5px solid ${badgeColor}25`, borderRadius: 16, padding: '8px 14px', display: 'flex', flexDirection: 'column', alignItems: 'center', flexShrink: 0, minWidth: 60 }}>
-                                <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 800, color: badgeColor, lineHeight: 1, letterSpacing: '-0.02em' }}>{atRisk}</span>
-                                <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 9, fontWeight: 700, color: badgeColor, letterSpacing: '0.08em', textTransform: 'uppercase', marginTop: 2 }}>of 7 at risk</span>
+                                <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 800, color: badgeColor, lineHeight: 1, letterSpacing: '-0.02em' }}>{standoutN}</span>
+                                <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 9, fontWeight: 700, color: badgeColor, letterSpacing: '0.08em', textTransform: 'uppercase', marginTop: 2 }}>of 7 stand out</span>
                             </div>
                         );
                     })()}
@@ -594,13 +605,13 @@ function RingCard({ data }) {
                                 <g key={`v${i}`} onClick={() => handleTap(i)} style={{ cursor: 'pointer' }}>
                                     {isAct && (
                                         <circle cx={p.x} cy={p.y} r={14}
-                                            fill={`${sevColor(f.pct)}12`}
-                                            stroke={sevColor(f.pct)}
+                                            fill={`${sevColor(signalScore(f))}12`}
+                                            stroke={sevColor(signalScore(f))}
                                             strokeWidth="1.2"
                                         />
                                     )}
                                     <circle cx={p.x} cy={p.y} r={isAct ? 7 : 5}
-                                        fill={sevColor(f.pct)}
+                                        fill={sevColor(signalScore(f))}
                                         stroke="white" strokeWidth="2.5"
                                         style={{ transition: 'all 0.2s ease' }}
                                     />
@@ -630,7 +641,7 @@ function RingCard({ data }) {
                                         textAnchor={anchor}
                                         fontFamily="Space Grotesk, sans-serif"
                                         fontSize="11" fontWeight="800"
-                                        fill={sevColor(f.pct)}
+                                        fill={sevColor(signalScore(f))}
                                     >{f.pct}%</text>
                                 </g>
                             );
@@ -650,17 +661,17 @@ function RingCard({ data }) {
                 {af && (
                     <div style={{
                         marginTop: 12,
-                        background: `${sevColor(af.pct)}0C`,
-                        border: `1.5px solid ${sevColor(af.pct)}25`,
+                        background: `${sevColor(signalScore(af))}0C`,
+                        border: `1.5px solid ${sevColor(signalScore(af))}25`,
                         borderRadius: 16, padding: '14px 16px',
                         display: 'flex', alignItems: 'center', gap: 12,
                         animation: 'fadeSlideUp 0.3s ease forwards',
                     }}>
                         <div style={{
                             width: 40, height: 40, borderRadius: 12,
-                            background: sevColor(af.pct),
+                            background: sevColor(signalScore(af)),
                             display: 'flex', alignItems: 'center', justifyContent: 'center',
-                            flexShrink: 0, boxShadow: `0 3px 10px ${sevColor(af.pct)}40`,
+                            flexShrink: 0, boxShadow: `0 3px 10px ${sevColor(signalScore(af))}40`,
                         }}>
                             <FactorIcon type={af.iconType} size={20} color="white" />
                         </div>
@@ -669,7 +680,7 @@ function RingCard({ data }) {
                                 fontFamily: "'Space Grotesk', sans-serif",
                                 fontSize: 14, fontWeight: 800, color: '#1A1612',
                             }}>
-                                {af.fullLabel} <span style={{ color: sevColor(af.pct) }}>{af.pct}%</span>
+                                {af.fullLabel} <span style={{ color: sevColor(signalScore(af)) }}>{af.pct}%</span>
                             </div>
                             <div style={{
                                 fontFamily: "'Nunito', sans-serif",
@@ -680,11 +691,11 @@ function RingCard({ data }) {
                         <div style={{
                             fontFamily: "'Space Grotesk', sans-serif",
                             fontSize: 9, fontWeight: 700,
-                            color: sevColor(af.pct),
+                            color: sevColor(signalScore(af)),
                             letterSpacing: '0.08em', textTransform: 'uppercase',
-                            background: `${sevColor(af.pct)}15`,
+                            background: `${sevColor(signalScore(af))}15`,
                             padding: '4px 10px', borderRadius: 8, flexShrink: 0,
-                        }}>{sevLabel(af.pct)}</div>
+                        }}>{sevLabel(signalScore(af))}</div>
                     </div>
                 )}
             </div>
@@ -791,10 +802,10 @@ function LifetimeStats({ data }) {
 
     const totalReels = maybeNum(data.totalReels);
     const totalSess = maybeNum(data.totalSessions);
-    const avgDwell = maybeNum(data.avgDwellTimeSec);
-    const estHoursRaw = (isFiniteNumber(totalReels) && isFiniteNumber(avgDwell))
-        ? (totalReels * avgDwell) / 3600 : null;
-    const estMovies = isFiniteNumber(estHoursRaw) ? Math.round(estHoursRaw / 2) : null;
+    const totalWatchedSeconds = maybeNum(data.totalWatchedSeconds);
+    const totalWatchedHours = isFiniteNumber(totalWatchedSeconds) ? (totalWatchedSeconds / 3600) : null;
+    const estMovies = isFiniteNumber(totalWatchedHours) ? Math.round(totalWatchedHours / 2) : null;
+    const totalTimeLabel = isFiniteNumber(totalWatchedSeconds) ? formatDurationSec(totalWatchedSeconds) : null;
     const reelsCounted = useCountUp(isFiniteNumber(totalReels) ? totalReels : 0, 600);
 
     return (
@@ -840,13 +851,21 @@ function LifetimeStats({ data }) {
                 <div style={{ fontFamily: "'Nunito', sans-serif", fontSize: 12, fontWeight: 700, color: '#9A8E84', marginBottom: 14, lineHeight: 1.5 }}>
                     How much content you've consumed across all sessions ever tracked.
                 </div>
-                <div style={{ display: 'flex', alignItems: 'flex-end', gap: 20, marginBottom: 10 }}>
+                <div style={{ display: 'flex', alignItems: 'flex-end', gap: 20, marginBottom: 10, flexWrap: 'wrap' }}>
                     <div>
                         <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 36, fontWeight: 800, color: '#6B3FA0', letterSpacing: '-0.03em', lineHeight: 1 }}>
                             {isFiniteNumber(totalReels) ? reelsCounted : '--'}
                         </div>
                         <div style={{ fontFamily: "'Nunito', sans-serif", fontSize: 11, fontWeight: 700, color: '#6B3FA0', opacity: 0.65, marginTop: 5 }}>reels watched</div>
                     </div>
+                    {totalTimeLabel && (
+                        <div style={{ paddingBottom: 18 }}>
+                            <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 22, fontWeight: 800, color: '#6B3FA0', opacity: 0.72, lineHeight: 1 }}>
+                                {totalTimeLabel}
+                            </div>
+                            <div style={{ fontFamily: "'Nunito', sans-serif", fontSize: 11, fontWeight: 700, color: '#6B3FA0', opacity: 0.45, marginTop: 5 }}>total time spent</div>
+                        </div>
+                    )}
                     {isFiniteNumber(totalSess) && totalSess > 0 && (
                         <div style={{ paddingBottom: 18 }}>
                             <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 22, fontWeight: 800, color: '#6B3FA0', opacity: 0.5, lineHeight: 1 }}>{totalSess}</div>
@@ -854,15 +873,15 @@ function LifetimeStats({ data }) {
                         </div>
                     )}
                 </div>
-                {isFiniteNumber(estHoursRaw) && (
+                {isFiniteNumber(totalWatchedHours) && (
                     <div style={{ background: 'rgba(107,63,160,0.06)', borderRadius: 12, padding: '10px 14px' }}>
                         <div style={{ fontFamily: "'Nunito', sans-serif", fontSize: 12, fontWeight: 800, color: '#4A2580', lineHeight: 1.5 }}>
-                            ≈ {estHoursRaw.toFixed(1)} hrs of content watched
+                            ≈ {totalWatchedHours.toFixed(1)} hrs of content watched
                             {isFiniteNumber(estMovies) && estMovies > 0 && ` — same as watching ${estMovies} full-length movie${estMovies !== 1 ? 's' : ''} back-to-back`}
                         </div>
                     </div>
                 )}
-                {!isFiniteNumber(estHoursRaw) && (
+                {!isFiniteNumber(totalWatchedHours) && (
                     <div style={{ fontFamily: "'Nunito', sans-serif", fontSize: 12, fontWeight: 700, color: '#9A8E84' }}>Need reel history to estimate time</div>
                 )}
             </div>

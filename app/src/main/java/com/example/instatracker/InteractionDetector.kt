@@ -219,7 +219,8 @@ object InteractionDetector {
         // Share button click — check before like/save because some share UI
         // elements also contain the word "send" which overlaps with comment submit
         if (containsIdToken(snapshot.viewIds, SHARE_ID_TOKENS) ||
-            words.any { it in setOf("share", "forward") }) {
+            words.any { it in setOf("share", "forward", "send", "direct", "compartir", "partager", "enviar") } ||
+            combined.contains("send to")) {
             return InteractionMatch(
                 type = InteractionType.SHARE,
                 debugSummary = "click:share ${snapshot.toDebugSummary()}"

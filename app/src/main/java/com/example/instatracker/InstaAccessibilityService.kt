@@ -573,6 +573,9 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
                         if (hasActiveReel && isCommentSheet && !commented) {
                             recordInteraction(InteractionType.COMMENT, now - lastReelStartTime, "window_state_sheet", "sheet_open title=$title cls=$className")
                         }
+                        if (hasActiveReel && isShareSheet && !shared) {
+                            recordInteraction(InteractionType.SHARE, now - lastReelStartTime, "window_state_sheet", "sheet_open title=$title cls=$className")
+                        }
                     }
                     pkg == "com.instagram.android" && isOverlaySheetOpen -> {
                         // Debounce by 1.5s to prevent immediate closure by empty overlay rendering events
@@ -1061,23 +1064,11 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
             .putInt("survey_session_num", -1)
             .apply()
         
-        // --- Layer 8: Micro-Probes Data Extraction ---
-        val rawProbe = prefs.getString("last_microprobe_result", "0,,0,0,0,0,0,0") ?: "0,,0,0,0,0,0,0"
-        val splitProbe = rawProbe.split(",")
-        if (splitProbe.size == 8) {
-            val rating = splitProbe[0].toIntOrNull() ?: 0
-            val action = splitProbe[1]
-            val match = splitProbe[2].toIntOrNull() ?: 0
-            val regret = splitProbe[3].toIntOrNull() ?: 0
-            val mBefore = splitProbe[4].toIntOrNull() ?: 0
-            val mAfter = splitProbe[5].toIntOrNull() ?: 0
-            val mDelta = splitProbe[6].toIntOrNull() ?: 0
-            comparativeRating = splitProbe[7].toIntOrNull() ?: 0
-            lastMicroprobeResults = listOf(rating, action, match, regret, mBefore, mAfter, mDelta)
-        } else {
-            lastMicroprobeResults = listOf(0, "unknown", 0, 0, 0, 0, 0)
-            comparativeRating = 0
-        }
+        // Post-session survey data must start empty for each new session.
+        // A completed micro-probe patches the just-finished session later; carrying
+        // the previous session's persisted result forward leaks stale labels into new rows.
+        lastMicroprobeResults = listOf(0, "", 0, 0, 0, 0, 0)
+        comparativeRating = 0
         
         currentIntention = prefs.getString("current_intended_action", "") ?: ""
         currentMoodBefore = prefs.getInt("current_mood_before", 0)
@@ -1157,22 +1148,16 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
         prefs.edit().putInt(KEY_SESSION_NUM, currentSessionNumber).putString("last_session_date", today).apply()
         
         // --- Layer 8: Trigger Probabilistic Paired Surveys ---
-        val sliderValue = prefs.getFloat("survey_probability", 0.30f)
-        val lastSt = prefs.getFloat("last_session_doom_score", 0.35f)
-        val baseRate = when {
-            lastSt >= 0.55f -> 0.90f
-            lastSt >= 0.35f -> 0.40f
-            else            -> 0.10f
-        }
+        val sliderValue = prefs.getFloat("survey_probability", 0.30f).coerceIn(0f, 1f)
         val isSurveySession = when {
             sliderValue == 0f    -> false
             sliderValue >= 0.95f -> true
-            else                 -> Math.random() < (sliderValue * baseRate)
+            else                 -> Math.random() < sliderValue
         }
 
         Log.i(
             "ReelioDiag",
-            "Survey decision: session=$currentSessionNumber slider=$sliderValue lastScore=$lastSt baseRate=$baseRate selected=$isSurveySession"
+            "Pre-survey decision: session=$currentSessionNumber slider=$sliderValue selected=$isSurveySession"
         )
 
         prefs.edit()
@@ -1186,6 +1171,9 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
             .putInt("probe_mood_delta", 0)
             .putInt("probe_actual_vs_intended", 0)
             .putInt("comparative_rating", 0)
+            .remove("survey_completed_for_session")
+            .remove("survey_completed_for_session_date")
+            .remove("last_microprobe_result")
             .apply()
 
         if (isSurveySession) showIntentionPrompt()
@@ -1357,64 +1345,26 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
             
             val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             
-            // Only show survey prompt if this is a survey session AND the user
-            // hasn't already completed the survey for this session number
-            // AND no survey activity is currently open (prevents stacking).
+            // Post-session surveys remain paired to sessions where the pre-session
+            // intention probe fired. The actual post-survey queue decision now
+            // happens later, after current-session inference is available.
             val surveySessionNum = prefs.getInt("survey_session_num", -1)
             val isSurvey = (surveySessionNum == currentSessionNumber)
-            val completedForSession = prefs.getInt("survey_completed_for_session", -1)
-            val alreadyCompleted = completedForSession == currentSessionNumber
-            var surveyAlreadyOpen = prefs.getBoolean("survey_activity_open", false)
-            val surveyOpenSince = prefs.getLong("survey_activity_open_since", 0L)
-
-            if (surveyAlreadyOpen) {
-                val ageMs = if (surveyOpenSince > 0L) endTime - surveyOpenSince else Long.MAX_VALUE
-                if (ageMs > SURVEY_ACTIVITY_STALE_MS) {
-                    Log.w("ReelioDiag", "Clearing stale survey_activity_open flag. ageMs=$ageMs")
-                    prefs.edit()
-                        .putBoolean("survey_activity_open", false)
-                        .remove("survey_activity_open_since")
-                        .apply()
-                    surveyAlreadyOpen = false
-                }
-            }
+            val sessionUuid = if (isSurvey && hasMeaningfulReelActivity) UUID.randomUUID().toString() else null
+            prefs.edit()
+                // Clear flag immediately so duplicate endCurrentSession calls
+                // can't create multiple paired-survey candidates for one session.
+                .putBoolean("is_survey_session", false)
+                .putInt("survey_session_num", -1)
+                .apply()
+            pendingSessionUuid = sessionUuid
 
             Log.i(
                 "ReelioDiag",
-                "Post survey gate: session=$currentSessionNumber surveySessionNum=$surveySessionNum isSurvey=$isSurvey completedFor=$completedForSession alreadyCompleted=$alreadyCompleted surveyOpen=$surveyAlreadyOpen pending=${prefs.getInt("pending_survey_session_num", -1)}"
+                "Post survey candidate: session=$currentSessionNumber preSurvey=$isSurvey meaningful=$hasMeaningfulReelActivity"
             )
-
-            if (isSurvey && !alreadyCompleted && !surveyAlreadyOpen && hasMeaningfulReelActivity) {
-                // Cancel any stale survey notification from a previous session
-                // that the user never completed, so notifications don't stack.
-                val prevPending = prefs.getInt("pending_survey_session_num", -1)
-                if (prevPending >= 0 && prevPending != currentSessionNumber) {
-                    val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                    nm.cancel(SURVEY_NOTIF_ID_BASE + prevPending)
-                    cancelPostSurveyAlarm(prevPending)
-                }
-                // Generate UUID synchronously BEFORE firing the notification,
-                // so MicroProbeActivity always reads the correct session UUID.
-                val sessionUuid = UUID.randomUUID().toString()
-                prefs.edit()
-                    .putInt("pending_survey_session_num", currentSessionNumber)
-                    .putString("pending_survey_session_uuid", sessionUuid)
-                    // Clear flag immediately so duplicate endCurrentSession calls
-                    // can't fire another notification for the same session.
-                    .putBoolean("is_survey_session", false)
-                    .putInt("survey_session_num", -1)
-                    .apply()
-                pendingSessionUuid = sessionUuid
-                val delayMs = schedulePostSurveyPrompt(endTime, currentSessionNumber)
-                Log.i(
-                    "ReelioDiag",
-                    "Post survey prompt queued for session=$currentSessionNumber delayMs=$delayMs"
-                )
-            } else {
-                if (!hasMeaningfulReelActivity) {
-                    Log.i("ReelioDiag", "Post survey skipped: no reel activity for session=$currentSessionNumber")
-                }
-                Log.i("ReelioDiag", "Post survey skipped for session=$currentSessionNumber")
+            if (!hasMeaningfulReelActivity) {
+                Log.i("ReelioDiag", "Post survey skipped: no reel activity for session=$currentSessionNumber")
             }
             
             sensorManager.unregisterListener(this)
@@ -1434,16 +1384,7 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
                     .apply()
             }
             
-            // schedulePostSessionProbes uses setExactAndAllowWhileIdle which throws
-            // SecurityException if the user hasn't granted SCHEDULE_EXACT_ALARM in
-            // system settings.  Isolate it so injectSessionToDatabase always runs.
-            try {
-                schedulePostSessionProbes(endTime)
-            } catch (e: Exception) {
-                android.util.Log.w("InstaTracker", "schedulePostSessionProbes failed (non-fatal): ${e.message}")
-            }
-
-            injectSessionToDatabase(savedSessionStart, endTime, pendingSessionUuid)
+            injectSessionToDatabase(savedSessionStart, endTime, pendingSessionUuid, hasMeaningfulReelActivity)
             
             pendingSessionUuid = null
         } catch (e: Exception) {
@@ -1453,43 +1394,67 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
         }
     }
     
-    private fun schedulePostSessionProbes(sessionEndTime: Long) {
-        // Only schedule delayed probe if this was a survey session
-        // (pendingSessionUuid is set when post-survey is queued)
-        if (pendingSessionUuid == null) return
-        
-        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        
-        // Delayed probe: only if session scored above borderline threshold
-        val lastDoom = prefs.getFloat("last_session_doom_score", 0f)
-        if (lastDoom >= 0.35f) {
-            val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
-            val intent = Intent(this, DelayedProbeReceiver::class.java).apply {
-                putExtra("session_num", currentSessionNumber)
-            }
-            val pending = PendingIntent.getBroadcast(
-                this,
-                currentSessionNumber + 5000,
-                intent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-            // SCHEDULE_EXACT_ALARM requires explicit user grant on API 31+.
-            // Fall back to inexact alarm if permission not yet granted.
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !alarmManager.canScheduleExactAlarms()) {
-                Log.w("InstaTracker", "Exact alarm permission not granted — using inexact delayed-probe alarm")
-                alarmManager.setAndAllowWhileIdle(
-                    AlarmManager.RTC_WAKEUP,
-                    sessionEndTime + 60 * 60 * 1000L,
-                    pending
-                )
-            } else {
-                alarmManager.setExactAndAllowWhileIdle(
-                    AlarmManager.RTC_WAKEUP,
-                    sessionEndTime + 60 * 60 * 1000L,
-                    pending
-                )
-            }
+    private fun schedulePostSessionProbes(sessionEndTime: Long, sessionNum: Int, doomScore: Float, isSurveySession: Boolean) {
+        // Only schedule delayed probe for sessions that were actually sampled.
+        if (!isSurveySession) return
+        if (doomScore < 0.35f) return
+
+        val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val intent = Intent(this, DelayedProbeReceiver::class.java).apply {
+            putExtra("session_num", sessionNum)
         }
+        val pending = PendingIntent.getBroadcast(
+            this,
+            sessionNum + 5000,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        // SCHEDULE_EXACT_ALARM requires explicit user grant on API 31+.
+        // Fall back to inexact alarm if permission not yet granted.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !alarmManager.canScheduleExactAlarms()) {
+            Log.w("InstaTracker", "Exact alarm permission not granted — using inexact delayed-probe alarm")
+            alarmManager.setAndAllowWhileIdle(
+                AlarmManager.RTC_WAKEUP,
+                sessionEndTime + 60 * 60 * 1000L,
+                pending
+            )
+        } else {
+            alarmManager.setExactAndAllowWhileIdle(
+                AlarmManager.RTC_WAKEUP,
+                sessionEndTime + 60 * 60 * 1000L,
+                pending
+            )
+        }
+    }
+
+    private fun queuePostSurveyForCurrentSession(
+        sessionEndTime: Long,
+        sessionNum: Int,
+        sessionUuid: String,
+        doomScore: Float
+    ) {
+        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val prevPending = prefs.getInt("pending_survey_session_num", -1)
+        if (prevPending >= 0 && prevPending != sessionNum) {
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.cancel(SURVEY_NOTIF_ID_BASE + prevPending)
+            cancelPostSurveyAlarm(prevPending)
+        }
+
+        prefs.edit()
+            .putInt("pending_survey_session_num", sessionNum)
+            .putString("pending_survey_session_uuid", sessionUuid)
+            .putString(
+                "pending_survey_session_date",
+                SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date(sessionEndTime))
+            )
+            .apply()
+
+        val delayMs = schedulePostSurveyPrompt(sessionEndTime, sessionNum)
+        Log.i(
+            "ReelioDiag",
+            "Post survey queued after current-session inference: session=$sessionNum doom=$doomScore delayMs=$delayMs"
+        )
     }
 
     private fun schedulePostSurveyPrompt(sessionEndTime: Long, sessionNum: Int): Long {
@@ -1532,7 +1497,7 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
         alarmManager.cancel(pending)
     }
     
-    private fun injectSessionToDatabase(startTime: Long, endTime: Long, preGeneratedUuid: String? = null) {
+    private fun injectSessionToDatabase(startTime: Long, endTime: Long, preGeneratedUuid: String? = null, hasMeaningfulReelActivity: Boolean = true) {
         val sTime = startTime
         val eTime = endTime
         val durSec = ((eTime - sTime) / 1000).toLong()
@@ -1551,16 +1516,24 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
         val cPhase = circadianPhase
         val sProxy = sleepProxyScore
         val constSc = consistencyScore
+        val sessionNum = currentSessionNumber
         
         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val rat = prefs.getInt("probe_post_rating", 0)
+        val sessionDate = sessionStartTime?.let { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date(it)) } ?: ""
+        val completedSurveySession = prefs.getInt("survey_completed_for_session", -1)
+        val completedSurveyDate = prefs.getString("survey_completed_for_session_date", "") ?: ""
+        val hasCompletedSurveyForThisSession =
+            completedSurveySession == sessionNum && completedSurveyDate == sessionDate
+
+        val rat = if (hasCompletedSurveyForThisSession) prefs.getInt("probe_post_rating", 0) else 0
         val act = prefs.getString("current_intended_action", "") ?: ""
-        val mat = prefs.getInt("probe_actual_vs_intended", 0) == 1
-        val reg = prefs.getInt("probe_regret_score", 0)
+        val mat = if (hasCompletedSurveyForThisSession) prefs.getInt("probe_actual_vs_intended", 0) == 1 else false
+        val reg = if (hasCompletedSurveyForThisSession) prefs.getInt("probe_regret_score", 0) else 0
         val mBf = prefs.getInt("current_mood_before", 0)
-        val mAf = prefs.getInt("probe_focus_after", 0)
+        val mAf = if (hasCompletedSurveyForThisSession) prefs.getInt("probe_focus_after", 0) else 0
         // Disabled: pre-state and post-focus now use different scales.
         val mDl = 0
+        val isSurveySession = preGeneratedUuid != null
 
         serviceScope.launch(Dispatchers.IO) {
             try {
@@ -1602,8 +1575,8 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
                         pyDict.callAttr("__setitem__", "RegretScore", reg)
                         pyDict.callAttr("__setitem__", "MoodBefore", mBf)
                         pyDict.callAttr("__setitem__", "MoodAfter", mAf)
-                        pyDict.callAttr("__setitem__", "DelayedRegretScore", prefs.getInt("delayed_regret_score_${currentSessionNumber}", 0))
-                        pyDict.callAttr("__setitem__", "ComparativeRating", prefs.getInt("comparative_rating", 0))
+                        pyDict.callAttr("__setitem__", "DelayedRegretScore", if (hasCompletedSurveyForThisSession) prefs.getInt("delayed_regret_score_${currentSessionNumber}", 0) else 0)
+                        pyDict.callAttr("__setitem__", "ComparativeRating", if (hasCompletedSurveyForThisSession) prefs.getInt("comparative_rating", 0) else 0)
                         pyDict.callAttr("__setitem__", "MorningRestScore", prefs.getInt("morning_rest_score", 0))
                         pyDict.callAttr("__setitem__", "PreviousContext", prefs.getString("previous_context", "unknown") ?: "unknown")
 
@@ -1634,11 +1607,54 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
                             .remove("last_microprobe_result")
                             .putFloat("last_session_doom_score", doomScore)
                             .apply()
+
+                        if (isSurveySession && hasMeaningfulReelActivity && preGeneratedUuid != null) {
+                            try {
+                                queuePostSurveyForCurrentSession(
+                                    sessionEndTime = eTime,
+                                    sessionNum = sessionNum,
+                                    sessionUuid = preGeneratedUuid,
+                                    doomScore = doomScore
+                                )
+                            } catch (e: Exception) {
+                                android.util.Log.w("InstaTracker", "queuePostSurveyForCurrentSession failed (non-fatal): ${e.message}")
+                            }
+                        }
+
+                        try {
+                            schedulePostSessionProbes(eTime, sessionNum, doomScore, isSurveySession)
+                        } catch (e: Exception) {
+                            android.util.Log.w("InstaTracker", "schedulePostSessionProbes failed (non-fatal): ${e.message}")
+                        }
                     } catch (t: Throwable) {
                         android.util.Log.e("ALSE", "Python inference failed: ${t.message}")
                         doomScore = computeKotlinFallbackScore()
                         doomLabel = "UNSCORED"
                         modelConf = 0.0f
+
+                        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+                            .remove("last_microprobe_result")
+                            .putFloat("last_session_doom_score", doomScore)
+                            .apply()
+
+                        if (isSurveySession && hasMeaningfulReelActivity && preGeneratedUuid != null) {
+                            try {
+                                queuePostSurveyForCurrentSession(
+                                    sessionEndTime = eTime,
+                                    sessionNum = sessionNum,
+                                    sessionUuid = preGeneratedUuid,
+                                    doomScore = doomScore
+                                )
+                            } catch (e: Exception) {
+                                android.util.Log.w("InstaTracker", "queuePostSurveyForCurrentSession failed after fallback score: ${e.message}")
+                            }
+                        }
+
+                        try {
+                            schedulePostSessionProbes(eTime, sessionNum, doomScore, isSurveySession)
+                        } catch (e: Exception) {
+                            android.util.Log.w("InstaTracker", "schedulePostSessionProbes failed after fallback score: ${e.message}")
+                        }
                     } finally {
                         Log.i("ReelioDiag", "Service releasing PYTHON_LOCK. time=${System.currentTimeMillis()} PID=${android.os.Process.myPid()}")
                     }
@@ -1868,17 +1884,17 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
             String.format("%.4f", sStats.cv), scrollBurstDuration, interBurstRestDuration, String.format("%.4f", sStats.entropy),
             uniqueAudioTracks.size, 0, 0f,
             String.format("%.4f", circadianPhase), String.format("%.2f", sleepProxyScore), String.format("%.1f", estimatedSleepDurationH), String.format("%.2f", consistencyScore), if (isWeekend) 1 else 0,
-            lastMicroprobeResults[0],
-            if (currentIntention.isNotEmpty()) currentIntention else lastMicroprobeResults[1],
-            lastMicroprobeResults[2],
-            lastMicroprobeResults[3],
-            if (currentMoodBefore > 0) currentMoodBefore else lastMicroprobeResults[4],
-            lastMicroprobeResults[5],
+            0,
+            currentIntention,
+            0,
+            0,
+            currentMoodBefore,
+            0,
             0,
             sleepStart, sleepEnd,
             prefs.getString("previous_context", "unknown") ?: "unknown",
-            prefs.getInt("delayed_regret_score_${currentSessionNumber}", 0),
-            prefs.getInt("comparative_rating", 0),
+            0,
+            0,
             prefs.getInt("morning_rest_score", 0)
         ).joinToString(",")
         

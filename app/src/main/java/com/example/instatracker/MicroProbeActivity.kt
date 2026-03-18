@@ -255,6 +255,9 @@ class MicroProbeActivity : Activity() {
             .putInt("survey_completed_for_session",
                 getSharedPreferences("InstaTrackerPrefs", MODE_PRIVATE)
                     .getInt("pending_survey_session_num", -1))
+            .putString("survey_completed_for_session_date",
+                getSharedPreferences("InstaTrackerPrefs", MODE_PRIVATE)
+                    .getString("pending_survey_session_date", "") ?: "")
             .apply()
 
         val sessNum = getSharedPreferences("InstaTrackerPrefs", MODE_PRIVATE)
@@ -370,6 +373,7 @@ class MicroProbeActivity : Activity() {
                 if (lines.size < 2) return
                 val header = lines[1].split(",")
                 val sessNumIdx       = header.indexOf("SessionNum")
+                val startTimeIdx     = header.indexOf("StartTime")
                 val postRatingIdx    = header.indexOf("PostSessionRating")
                 val intendedIdx      = header.indexOf("IntendedAction")
                 val matchIdx         = header.indexOf("ActualVsIntendedMatch")
@@ -378,12 +382,19 @@ class MicroProbeActivity : Activity() {
                 val moodAfterIdx     = header.indexOf("MoodAfter")
                 val comparativeIdx   = header.indexOf("ComparativeRating")
                 val delayedRegretIdx = header.indexOf("DelayedRegretScore")
-                if (sessNumIdx < 0 || postRatingIdx < 0) return
+                if (sessNumIdx < 0 || startTimeIdx < 0 || postRatingIdx < 0) return
+
+                val targetDatePrefix = (prefs.getString("pending_survey_session_date", "") ?: "").trim()
 
                 var updated = 0
                 for (i in 2 until lines.size) {
                     val fields = lines[i].split(",").toMutableList()
-                    if (fields.size <= sessNumIdx || fields[sessNumIdx].trim() != targetSessionNum) continue
+                    if (fields.size <= sessNumIdx || fields.size <= startTimeIdx) continue
+                    if (fields[sessNumIdx].trim() != targetSessionNum) continue
+
+                    val rowStartTime = fields[startTimeIdx].trim()
+                    if (targetDatePrefix.isNotEmpty() && !rowStartTime.startsWith(targetDatePrefix)) continue
+
                     if (postRatingIdx < fields.size)    fields[postRatingIdx]  = postSessionRating.toString()
                     if (intendedIdx in 0 until fields.size)  fields[intendedIdx]   = intendedAction
                     if (matchIdx in 0 until fields.size)     fields[matchIdx]      = actualMatch.toString()

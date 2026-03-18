@@ -523,7 +523,27 @@ function OnboardingState() {
 
 // ─── normalizeData ────────────────────────────────────────────────────────────
 function normalizeData(rawData) {
-    const sessions = safeArr(rawData?.sessions).filter((s) => s && typeof s === "object");
+    // Apply any window-scoped retroactive label cache before deriving views.
+    // This prevents a brief backend / cache lag from making freshly labeled
+    // sessions lose their survey chips or re-show the "Label this session"
+    // button after a few seconds.
+    const retroCache =
+        (typeof window !== "undefined" && window.__retroactiveLabelCache && typeof window.__retroactiveLabelCache === "object")
+            ? window.__retroactiveLabelCache
+            : {};
+
+    const mergeRetro = (sess) => {
+        if (!sess || typeof sess !== "object") return sess;
+        const sNum = sess.sessionNum != null ? String(sess.sessionNum) : "";
+        const sDate = typeof sess.date === "string" ? sess.date : "";
+        const cacheKey = `${sNum}|${sDate}`;
+        const override = retroCache[cacheKey];
+        return override ? { ...sess, ...override } : sess;
+    };
+
+    const sessions = safeArr(rawData?.sessions)
+        .filter((s) => s && typeof s === "object")
+        .map(mergeRetro);
     const mostRecent = sessions[sessions.length - 1] || null;
     const sessionProbabilities = sessions.map((s) => maybeNum(s.S_t)).filter(isFiniteNumber);
     const sessionDurations = sessions.map((s) => deriveSessionDurationSec(s)).filter(isFiniteNumber);
@@ -556,6 +576,22 @@ function normalizeData(rawData) {
         if (isFiniteNumber(a.ts) && isFiniteNumber(b.ts)) return a.ts - b.ts;
         return a.idx - b.idx;
     });
+
+    const deriveHeatmapLabels = (dateKey, fallbackLabel = "") => {
+        if (typeof dateKey === "string" && /^\d{4}-\d{2}-\d{2}$/.test(dateKey)) {
+            const dt = new Date(`${dateKey}T12:00:00`);
+            if (!Number.isNaN(dt.getTime())) {
+                return {
+                    dayLabel: dt.toLocaleDateString(undefined, { weekday: "short" }).toUpperCase(),
+                    dateLabel: dt.toLocaleDateString(undefined, { month: "short", day: "numeric" })
+                };
+            }
+        }
+        return {
+            dayLabel: fallbackLabel || "",
+            dateLabel: dateKey || ""
+        };
+    };
 
     const timelineEntryFromSource = (entry, prevTs) => {
         const source = entry.raw || entry;
@@ -616,7 +652,10 @@ function normalizeData(rawData) {
 
     const providedTodaySource = safeArr(rawData?.todaySessions)
         .filter((s) => s && typeof s === "object")
-        .map((s, idx) => ({ raw: s, idx, ts: pickSessionTimestampMs(s), durationSec: deriveSessionDurationSec(s) }));
+        .map((s, idx) => {
+            const merged = mergeRetro(s);
+            return { raw: merged, idx, ts: pickSessionTimestampMs(merged), durationSec: deriveSessionDurationSec(merged) };
+        });
 
     providedTodaySource.sort((a, b) => {
         if (isFiniteNumber(a.ts) && isFiniteNumber(b.ts)) return a.ts - b.ts;
@@ -737,6 +776,7 @@ function normalizeData(rawData) {
     const derivedAvgSessionDurationSec = averageOf(sessionDurations);
     const derivedAvgReelsPerSession = averageOf(sessionReels);
     const derivedAvgDwellTimeSec = averageOf(sessionDwells);
+    const derivedTotalWatchedSeconds = sessionDurations.length ? sumOf(sessionDurations) : null;
 
     // Threshold must match Python's DOOM_PROBABILITY_THRESHOLD = 0.55 exactly.
     // Using > 0.5 here would classify S_t ∈ (0.50, 0.55) as doom — inconsistent with backend.
@@ -947,16 +987,63 @@ function normalizeData(rawData) {
         modelConfidence
     };
 
+    const personalCaptureBaselineSec = (() => {
+        const recentDurations = sessions
+            .map((entry) => {
+                const source = entry?.raw || entry || {};
+                return maybeNum(entry?.durationSec)
+                    ?? maybeNum(source.durationSec)
+                    ?? maybeNum(source.sessionDurationSec)
+                    ?? deriveSessionDurationSec(source);
+            })
+            .filter((durationSec) => isFiniteNumber(durationSec) && durationSec >= 20)
+            .slice(-30)
+            .sort((a, b) => a - b);
+        if (!recentDurations.length) return 180;
+        const mid = Math.floor(recentDurations.length / 2);
+        const median = recentDurations.length % 2
+            ? recentDurations[mid]
+            : (recentDurations[mid - 1] + recentDurations[mid]) / 2;
+        return Math.min(300, Math.max(90, median));
+    })();
+
+    const getDailyCaptureWeight = (entry) => {
+        const source = entry?.raw || entry || {};
+        const explicitDurationSec = maybeNum(source.durationSec) ?? maybeNum(source.sessionDurationSec);
+        const fallbackDurationSec = isFiniteNumber(entry?.durationSec) ? entry.durationSec : deriveSessionDurationSec(source);
+        const durationSec = isFiniteNumber(explicitDurationSec) ? explicitDurationSec : fallbackDurationSec;
+        if (!isFiniteNumber(durationSec) || durationSec <= 0) return 0.2;
+
+        // Reach full influence by the user's recent median session duration,
+        // while still aggressively downweighting tiny sessions.
+        const baseWeight = Math.min(durationSec / personalCaptureBaselineSec, 1);
+        if (durationSec < 30) return Math.max(0.06, baseWeight * 0.2);
+        if (durationSec < 60) return Math.max(0.12, baseWeight * 0.45);
+        if (durationSec < 120) return Math.max(0.3, baseWeight * 0.75);
+        return Math.max(0.45, baseWeight);
+    };
+
     // Derive per-day heatmap from dateBuckets (real organic S_t data from ALSE).
-    // Each day's avgCapture = mean of S_t across all sessions that day.
-    // This is used when Python doesn't send pre-aggregated heatmapData (it never does).
+    // Use evidence-weighted aggregation so tiny low-evidence sessions don't swing the day.
     const derivedHeatmapData = dateKeys.map((dateKey) => {
         const bucket = dateBuckets[dateKey] || [];
-        const probs = bucket.map((e) => maybeNum(e.raw?.S_t)).filter(isFiniteNumber);
-        const avgCapture = probs.length ? probs.reduce((s, p) => s + p, 0) / probs.length : null;
+        const weighted = bucket
+            .map((e) => {
+                const prob = maybeNum(e.raw?.S_t);
+                if (!isFiniteNumber(prob)) return null;
+                const weight = getDailyCaptureWeight(e);
+                return weight > 0 ? { prob, weight } : null;
+            })
+            .filter(Boolean);
+        const totalWeight = weighted.length ? weighted.reduce((sum, e) => sum + e.weight, 0) : 0;
+        const avgCapture = totalWeight > 0
+            ? weighted.reduce((sum, e) => sum + (e.prob * e.weight), 0) / totalWeight
+            : null;
+        const labels = deriveHeatmapLabels(dateKey, dateKey.slice(5));
         return {
             date: dateKey,
-            dayLabel: dateKey.slice(5),
+            dayLabel: labels.dayLabel,
+            dateLabel: labels.dateLabel,
             avgCapture,
             riskLevel: null,
             sessionCount: bucket.length,
@@ -964,22 +1051,33 @@ function normalizeData(rawData) {
     }).filter((d) => isFiniteNumber(d.avgCapture));
 
     const heatmapData = safeArr(rawData?.heatmapData).length
-        ? safeArr(rawData.heatmapData).map((d) => ({
-            date: d?.date || "",
-            dayLabel: d?.dayLabel || d?.d || "",
-            avgCapture: maybeNum(d?.avgCapture) ?? maybeNum(d?.v),
-            riskLevel: d?.riskLevel || null,
-            sessionCount: maybeNum(d?.sessionCount) ?? maybeNum(d?.s)
-        }))
+        ? safeArr(rawData.heatmapData).map((d) => {
+            const date = d?.date || "";
+            const labels = deriveHeatmapLabels(date, d?.dayLabel || d?.d || "");
+            return {
+                date,
+                dayLabel: labels.dayLabel,
+                dateLabel: labels.dateLabel,
+                avgCapture: maybeNum(d?.avgCapture) ?? maybeNum(d?.v),
+                riskLevel: d?.riskLevel || null,
+                sessionCount: maybeNum(d?.sessionCount) ?? maybeNum(d?.s)
+            };
+        })
         : safeArr(rawData?.days14).length
-        ? safeArr(rawData.days14).map((d) => ({
-            date: d?.date || "",
-            dayLabel: d?.dayLabel || d?.d || "",
-            avgCapture: maybeNum(d?.avgCapture) ?? maybeNum(d?.v),
-            riskLevel: d?.riskLevel || null,
-            sessionCount: maybeNum(d?.sessionCount) ?? maybeNum(d?.s)
-        }))
+        ? safeArr(rawData.days14).map((d) => {
+            const date = d?.date || "";
+            const labels = deriveHeatmapLabels(date, d?.dayLabel || d?.d || "");
+            return {
+                date,
+                dayLabel: labels.dayLabel,
+                dateLabel: labels.dateLabel,
+                avgCapture: maybeNum(d?.avgCapture) ?? maybeNum(d?.v),
+                riskLevel: d?.riskLevel || null,
+                sessionCount: maybeNum(d?.sessionCount) ?? maybeNum(d?.s)
+            };
+        })
         : derivedHeatmapData;
+    heatmapData.sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
 
     // Count of consecutive doom sessions from the most recent backwards.
     // Breaks on the first non-doom session — this is a recency count, not a validated "clean streak".
@@ -1071,6 +1169,7 @@ function normalizeData(rawData) {
         idleSinceLastSessionMin,
         pullIndex,
         totalReels: maybeNum(rawData?.totalReels) ?? (sessionReels.length ? sumOf(sessionReels) : (timelineCapture.length || null)),
+        totalWatchedSeconds: maybeNum(rawData?.totalWatchedSeconds) ?? derivedTotalWatchedSeconds,
         doomRate: maybeNum(rawData?.doomRate) ?? derivedAllTimeCaptureRate,
         tenSessionAvgScore: maybeNum(rawData?.tenSessionAvgScore) ?? derivedTenSessionAvgScore,
         allTimeCaptureRate: maybeNum(rawData?.allTimeCaptureRate) ?? derivedAllTimeCaptureRate,
@@ -1286,7 +1385,7 @@ export default function ReeliApp() {
     const [rawData, setRawData] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
-    // Splash: onboarding screen shows for ≥7s on cold start, or until data arrives (whichever is later)
+    // Splash: onboarding screen shows for ≥4s on cold start, or until data arrives (whichever is later)
     const [splashDone, setSplashDone] = useState(false);
 
     const checkA11y = () => typeof window.Android?.isAccessibilityEnabled === 'function'
@@ -1310,9 +1409,9 @@ export default function ReeliApp() {
         return () => { clearInterval(id); window.removeEventListener('a11y-status', onStatus); };
     }, []);
 
-    // 7-second splash timer
+    // 4-second splash timer
     useEffect(() => {
-        const tid = setTimeout(() => setSplashDone(true), 7000);
+        const tid = setTimeout(() => setSplashDone(true), 4000);
         return () => clearTimeout(tid);
     }, []);
 
@@ -1377,6 +1476,15 @@ export default function ReeliApp() {
                     const json = atob(b64);
                     const label = JSON.parse(json);
                     console.log("[Bridge] Received retroactive label update:", label);
+                    // Also fire the global callback so DashboardToday + normalizeData
+                    // can persist the override via the window-level cache.
+                    if (typeof window.onRetroactiveLabelComplete === 'function') {
+                        try {
+                            window.onRetroactiveLabelComplete(b64);
+                        } catch (cbErr) {
+                            console.warn("[Bridge] onRetroactiveLabelComplete callback failed:", cbErr);
+                        }
+                    }
                     
                     setRawData(prev => {
                         if (!prev) return prev;

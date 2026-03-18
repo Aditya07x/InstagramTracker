@@ -20,6 +20,40 @@ const stateFromCapture = (avgCapture) => {
     return CAPTURE_STATES[3];                          // mindful
 };
 
+const derivePersonalCaptureBaselineSec = (dateBuckets) => {
+    const recentDurations = Object.values(dateBuckets || {})
+        .flatMap((bucket) => safeArr(bucket))
+        .map((entry) => {
+            const source = entry?.raw || entry || {};
+            return maybeNum(entry?.durationSec)
+                ?? maybeNum(source.durationSec)
+                ?? maybeNum(source.sessionDurationSec);
+        })
+        .filter((durationSec) => isFiniteNumber(durationSec) && durationSec >= 20)
+        .slice(-30)
+        .sort((a, b) => a - b);
+    if (!recentDurations.length) return 180;
+    const mid = Math.floor(recentDurations.length / 2);
+    const median = recentDurations.length % 2
+        ? recentDurations[mid]
+        : (recentDurations[mid - 1] + recentDurations[mid]) / 2;
+    return Math.min(300, Math.max(90, median));
+};
+
+const getDayCaptureWeight = (entry, personalBaselineSec = 180) => {
+    const source = entry?.raw || entry || {};
+    const durationSec = maybeNum(entry?.durationSec)
+        ?? maybeNum(source.durationSec)
+        ?? maybeNum(source.sessionDurationSec);
+    if (!isFiniteNumber(durationSec) || durationSec <= 0) return 0.2;
+
+    const baseWeight = Math.min(durationSec / personalBaselineSec, 1);
+    if (durationSec < 30) return Math.max(0.06, baseWeight * 0.2);
+    if (durationSec < 60) return Math.max(0.12, baseWeight * 0.45);
+    if (durationSec < 120) return Math.max(0.3, baseWeight * 0.75);
+    return Math.max(0.45, baseWeight);
+};
+
 // ─── CaptureIcon — 4 minimal line-art faces, one per capture state ────────────
 const CaptureIcon = ({ stateId, size = 22 }) => {
     const ink = '#1A1612';
@@ -81,7 +115,7 @@ const CaptureIcon = ({ stateId, size = 22 }) => {
 const monthNames = ['January', 'February', 'March', 'April', 'May', 'June',
     'July', 'August', 'September', 'October', 'November', 'December'];
 
-function DayDetailSheet({ dateStr, dayBucket, onClose }) {
+function DayDetailSheet({ dateStr, dayBucket, personalCaptureBaselineSec, onClose }) {
     if (!dateStr || !dayBucket) return null;
 
     const [y, m, d] = dateStr.split('-').map(Number);
@@ -94,8 +128,19 @@ function DayDetailSheet({ dateStr, dayBucket, onClose }) {
         return at - bt;
     });
 
-    const avgCapture = sessions.length
-        ? sessions.reduce((s, e) => s + safeNum(maybeNum(e.raw?.S_t), 0), 0) / sessions.length
+    const weighted = sessions
+        .map((e) => {
+            const prob = maybeNum(e.raw?.S_t);
+            if (!isFiniteNumber(prob)) return null;
+            const weight = getDayCaptureWeight(e, personalCaptureBaselineSec);
+            return weight > 0 ? { prob, weight } : null;
+        })
+        .filter(Boolean);
+    const totalWeight = weighted.length
+        ? weighted.reduce((sum, e) => sum + e.weight, 0)
+        : 0;
+    const avgCapture = totalWeight > 0
+        ? weighted.reduce((sum, e) => sum + (e.prob * e.weight), 0) / totalWeight
         : null;
     const dayState = isFiniteNumber(avgCapture) ? stateFromCapture(avgCapture) : CAPTURE_STATES[2];
 
@@ -163,6 +208,20 @@ function DayDetailSheet({ dateStr, dayBucket, onClose }) {
                         const reels = maybeNum(s.nReels);
                         const dwell = maybeNum(s.avgDwell);
                         const period = typeof s.timePeriod === 'string' && s.timePeriod !== 'Unknown' ? s.timePeriod : null;
+                        const postSessionRating = maybeNum(s.postSessionRating);
+                        const regretScore = maybeNum(s.regretScore);
+                        const moodAfter = maybeNum(s.moodAfter);
+                        const comparativeRating = maybeNum(s.comparativeRating);
+                        const intendedAction = typeof s.intendedAction === 'string' ? s.intendedAction : '';
+                        const retroactiveLabel = Boolean(s.retroactiveLabel);
+                        // Treat a session as surveyed only when at least one of the
+                        // core survey fields is present. This guards against legacy
+                        // payloads where hasSurvey may be true but all metrics are 0.
+                        const hasSurvey =
+                            (isFiniteNumber(postSessionRating) && postSessionRating > 0) ||
+                            (isFiniteNumber(regretScore) && regretScore > 0) ||
+                            (isFiniteNumber(moodAfter) && moodAfter > 0) ||
+                            (isFiniteNumber(comparativeRating) && comparativeRating > 0);
 
                         // Format start time
                         let startLabel = '--';
@@ -213,6 +272,42 @@ function DayDetailSheet({ dateStr, dayBucket, onClose }) {
                                         {durLabel}
                                         {isFiniteNumber(dwell) ? `  ·  ${dwell.toFixed(1)}s/reel` : ''}
                                     </div>
+                                    {hasSurvey && (
+                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+                                            <span style={{
+                                                fontSize: 10, fontWeight: 900, padding: '4px 10px', borderRadius: 8,
+                                                background: 'rgba(58,158,111,0.10)', border: '1px solid rgba(58,158,111,0.20)', color: '#3A9E6F',
+                                                textTransform: 'uppercase', letterSpacing: '0.02em'
+                                            }}>
+                                                {retroactiveLabel ? 'Retroactively Labeled' : 'Surveyed'}
+                                            </span>
+                                            {isFiniteNumber(postSessionRating) && postSessionRating > 0 && (
+                                                <span style={{ fontSize: 10, fontWeight: 700, padding: '3px 8px', borderRadius: 8, background: '#EEE9F5', color: '#6B3FA0' }}>
+                                                    Rating {postSessionRating}/5
+                                                </span>
+                                            )}
+                                            {isFiniteNumber(regretScore) && regretScore > 0 && (
+                                                <span style={{ fontSize: 10, fontWeight: 700, padding: '3px 8px', borderRadius: 8, background: regretScore >= 4 ? '#F5EDE9' : '#EAF3EE', color: regretScore >= 4 ? '#C4563A' : '#2A7A54' }}>
+                                                    Regret {regretScore}/5
+                                                </span>
+                                            )}
+                                            {isFiniteNumber(moodAfter) && moodAfter > 0 && (
+                                                <span style={{ fontSize: 10, fontWeight: 700, padding: '3px 8px', borderRadius: 8, background: '#EEE9F5', color: '#6B3FA0' }}>
+                                                    Mood {moodAfter}/5
+                                                </span>
+                                            )}
+                                            {isFiniteNumber(comparativeRating) && comparativeRating > 0 && (
+                                                <span style={{ fontSize: 10, fontWeight: 700, padding: '3px 8px', borderRadius: 8, background: '#F5F0E2', color: '#9A7020' }}>
+                                                    Experience {comparativeRating}/5
+                                                </span>
+                                            )}
+                                            {intendedAction && intendedAction !== '0' && intendedAction !== '0.0' && (
+                                                <span style={{ fontSize: 10, fontWeight: 700, padding: '3px 8px', borderRadius: 8, background: '#F5F0E2', color: '#9A7020' }}>
+                                                    Intent: {intendedAction}
+                                                </span>
+                                            )}
+                                        </div>
+                                    )}
                                 </div>
                                 {/* Capture badge */}
                                 {isFiniteNumber(prob) && (
@@ -247,6 +342,7 @@ function CaptureCalendarScreen({ data }) {
     const modelConfidence = maybeNum(data.modelConfidence);
     // dateBuckets passed from app.jsx for per-session drill-down
     const dateBuckets = data.dateBuckets || {};
+    const personalCaptureBaselineSec = derivePersonalCaptureBaselineSec(dateBuckets);
 
     const dayLookup = {};
     heatmap.forEach(d => {
@@ -535,6 +631,7 @@ function CaptureCalendarScreen({ data }) {
                 <DayDetailSheet
                     dateStr={selectedDay}
                     dayBucket={dateBuckets[selectedDay]}
+                    personalCaptureBaselineSec={personalCaptureBaselineSec}
                     onClose={() => setSelectedDay(null)}
                 />
             )}
