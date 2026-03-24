@@ -93,7 +93,7 @@ def build_derived_features(csv_path: str) -> pd.DataFrame:
     
     # Rough Entropy estimation (histogram binning)
     def calculate_entropy(x):
-        if len(x) < 2: return 0.0
+        if len(x) < 2: return np.nan   # undefined, not zero
         counts, _ = np.histogram(x, bins=10, density=True)
         probs = counts / counts.sum()
         probs = probs[probs > 0]
@@ -143,17 +143,52 @@ def build_derived_features(csv_path: str) -> pd.DataFrame:
     
     # Estimate Sleep proxy
     session_edges = df.groupby('SessionNum').agg({'StartTime': 'min', 'EndTime': 'max'}).reset_index()
-    session_edges = session_edges.sort_values('StartTime')
+    session_edges = session_edges.sort_values('StartTime').reset_index(drop=True)
     session_edges['NextStartTime'] = session_edges['StartTime'].shift(-1)
     session_edges['GapHours'] = (session_edges['NextStartTime'] - session_edges['EndTime']).dt.total_seconds() / 3600.0
     
-    # Look for the largest gap of the previous day, assuming it's sleep
-    session_edges['EstimatedSleepDuration_h'] = session_edges['GapHours'].apply(lambda x: x if x > 3.0 else 7.0) # default 7 if no huge gap seen
+    session_edges['EstimatedSleepDuration_h'] = session_edges['GapHours'].apply(lambda x: x if x > 3.0 else 7.0)
+    session_edges['PriorSleepDur'] = session_edges['EstimatedSleepDuration_h'].shift(1).fillna(7.0)
     
-    sleep_dict = session_edges.set_index('SessionNum')['EstimatedSleepDuration_h'].to_dict()
-    df['EstimatedSleepDuration_h'] = df['SessionNum'].map(sleep_dict).fillna(7.0).shift(1).fillna(7.0) # Assume 7h if first session
+    sleep_dict = session_edges.set_index('SessionNum')['PriorSleepDur'].to_dict()
+    df['EstimatedSleepDurationH'] = df['SessionNum'].map(sleep_dict).fillna(7.0)
     
-    df['SleepDeprived'] = np.where(df['EstimatedSleepDuration_h'] < 6.0, 1, 0)
+    df['SleepDeprived'] = (df['EstimatedSleepDurationH'] < 6.0).astype(int)
+    
+    # FIX-02: Mood Delta (Without normalization)
+    df['MoodDelta'] = 0.0
+    if 'MoodBefore' in df.columns and 'MoodAfter' in df.columns:
+        mood_mask = (df['MoodBefore'] > 0) & (df['MoodAfter'] > 0)
+        df.loc[mood_mask, 'MoodDelta'] = df.loc[mood_mask, 'MoodAfter'] - df.loc[mood_mask, 'MoodBefore']
+        
+    # FIX-07: Battery Delta cleanup
+    if 'IsCharging' in df.columns and 'BatteryDeltaPerSession' in df.columns:
+        df['BatteryDeltaPerSession'] = np.where(
+            df['IsCharging'] == 1,
+            0.0,
+            df['BatteryDeltaPerSession'].clip(upper=0)
+        )
+        
+    # FIX-09: SpeedDwellRatio
+    if 'AvgScrollSpeed' in df.columns and 'DwellTime' in df.columns:
+        df['SpeedDwellRatio'] = (
+            np.log1p(df['AvgScrollSpeed'].clip(lower=0)) /
+            np.log1p(df['DwellTime'].clip(lower=0.1))
+        )
+        speed_dwell_session = df.groupby('SessionNum')['SpeedDwellRatio'].mean().rename('SessionSpeedDwellRatio')
+        df = df.join(speed_dwell_session, on='SessionNum')
+        
+    # FIX-11: LongPause
+    if 'AvgScrollSpeed' in df.columns and 'DwellTime' in df.columns:
+        DWELL_MEDIAN = df['DwellTime'].median()
+        if pd.isna(DWELL_MEDIAN) or DWELL_MEDIAN == 0:
+            DWELL_MEDIAN = 5.49
+        df['LongPause'] = (
+            (df['AvgScrollSpeed'] == 0) &
+            (df['DwellTime'] > DWELL_MEDIAN * 2)
+        ).astype(int)
+        long_pause_rate = df.groupby('SessionNum')['LongPause'].mean().rename('LongPauseRate')
+        df = df.join(long_pause_rate, on='SessionNum')
     
     # Consistency Score (variance of start hour)
     start_hours = session_edges.groupby(session_edges['StartTime'].dt.date)['StartTime'].apply(lambda dt: dt.iloc[0].hour + dt.iloc[0].minute/60.0)

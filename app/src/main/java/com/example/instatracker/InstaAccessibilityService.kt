@@ -446,7 +446,13 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
                         // next entry can show a fresh pre-session prompt.
                         endCurrentSession(lastActiveTime)
                     } else if (exitDuration < 20_000L) {
-                        appExitAttempts++
+                        // Only count as exit-attempt if user was actively in the reel feed.
+                        // lastScrollTime tracks the last reel-feed scroll; 10s threshold means
+                        // "the last thing they were doing was scrolling reels."
+                        val timeSinceLastReelActivity = now - lastScrollTime
+                        if (currentReelIndex != null && reelCount > 0 && timeSinceLastReelActivity < 10_000L) {
+                            appExitAttempts++
+                        }
                     }
                     lastExitTime = 0L
                 }

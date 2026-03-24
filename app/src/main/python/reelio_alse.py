@@ -27,6 +27,25 @@ import pandas as pd
 DOOM_PROBABILITY_THRESHOLD = 0.55    # single source of truth for all doom classification
 PIPELINE_VERSION = 6                 # bump when payload/aggregation semantics change
 
+# FIX-03: Systematic over-prediction bias correction
+# Fitted from 43 validation pairs (pred mean=0.636, actual mean=0.279)
+CALIBRATION_BIAS = 0.357
+
+def apply_calibration(raw_score: float, bias: float = CALIBRATION_BIAS) -> float:
+    """Subtract the systematic over-prediction bias, then re-clamp.
+    Replace with Platt scaling once n_validations > 80."""
+    corrected = raw_score - bias
+    return float(np.clip(corrected, 0.0, 1.0))
+
+# FIX-13: Session-count-today anomaly detection
+def compute_frequency_risk(sessions_today: int, baseline_daily_sessions: float) -> float:
+    """Returns a 0-1 multiplier that amplifies capture risk
+    when session count is anomalously high."""
+    if baseline_daily_sessions < 1.0:
+        return 0.0
+    freq_ratio = sessions_today / baseline_daily_sessions
+    return float(np.clip((freq_ratio - 2.0) / 2.0, 0.0, 1.0))
+
 COMPONENT_NAMES = [
     'session_length', 'exit_conflict', 'rapid_reentry', 
     'scroll_automaticity', 'dwell_collapse', 'rewatch_compulsion', 'environment'
@@ -171,7 +190,8 @@ def compute_supervised_doom_label(
     comparative_rating: float = 0.0,
     post_session_rating: float = 0.0,
     intended_action: str = "",
-    actual_vs_intended_match: float = 2.0
+    actual_vs_intended_match: float = 2.0,
+    mood_delta_raw: float = 0.0
 ) -> float:
     """
     Compute a supervised doom target in [0, 1] using the shared priority chain:
@@ -213,6 +233,11 @@ def compute_supervised_doom_label(
         label_score = min(post_doom, 0.60)
     else:
         label_score = imm
+
+    # FIX-12: Passive mood signal — apply as weak modifier when no explicit label exists
+    if label_score == 0.0 and mood_delta_raw != 0.0:
+        mood_modifier = float(np.clip(-mood_delta_raw * 0.05, -0.15, 0.15))
+        label_score = float(np.clip(0.5 + mood_modifier, 0.0, 1.0))
 
     try:
         match_val = int(float(actual_vs_intended_match))
@@ -351,7 +376,16 @@ def preprocess_session(df):
     if 'log_speed' not in df.columns:
         df['log_speed'] = np.log(np.maximum(df['AvgScrollSpeed'] if 'AvgScrollSpeed' in df.columns else 1.0, 1.0))
     if 'rhythm_dissociation' not in df.columns:
-        df['rhythm_dissociation'] = df['ScrollRhythmEntropy']
+        n_reels = max(1, effective_session_reel_count(df))
+        if n_reels < 2 or df['ScrollRhythmEntropy'].isna().all():
+            # Entropy is undefined for single-reel sessions — use neutral midpoint
+            # between learned mu[2,0] and mu[2,1] to produce equal emission likelihoods
+            df['rhythm_dissociation'] = 0.8
+        else:
+            # Fill any remaining NaN from calculate_entropy with the session median
+            df['rhythm_dissociation'] = df['ScrollRhythmEntropy'].fillna(
+                df['ScrollRhythmEntropy'].median()
+            )
     if 'rewatch_flag' not in df.columns:
         df['rewatch_flag'] = (df['BackScrollCount'] > 0).astype(float)
     if 'exit_flag' not in df.columns:
@@ -367,7 +401,8 @@ def preprocess_session(df):
             comparative_rating=float(df['ComparativeRating'].iloc[0]) if 'ComparativeRating' in df.columns else 0.0,
             post_session_rating=float(df['PostSessionRating'].iloc[0]) if 'PostSessionRating' in df.columns else 0.0,
             intended_action=str(df['IntendedAction'].iloc[0]) if 'IntendedAction' in df.columns else "",
-            actual_vs_intended_match=float(df['ActualVsIntendedMatch'].iloc[0]) if 'ActualVsIntendedMatch' in df.columns else 2.0
+            actual_vs_intended_match=float(df['ActualVsIntendedMatch'].iloc[0]) if 'ActualVsIntendedMatch' in df.columns else 2.0,
+            mood_delta_raw=float(df['MoodDelta'].iloc[0]) if 'MoodDelta' in df.columns else 0.0
         )
     
     # Intent-behavior mismatch signal
@@ -633,6 +668,7 @@ class RegimeDetector:
         self.hour_history = []
         self.regime_alert = False
         self.alert_duration = 0
+        self.time_since_last_alert = 100  # FIX-06: cooldown counter
 
     def update(self, S_t, session_df, baseline: UserBaseline, session_timestamp: str = "") -> bool:
         if len(session_df) == 0:
@@ -693,18 +729,21 @@ class RegimeDetector:
             if self.alert_duration >= 3 and cleared_a and not (crit_b or crit_c or crit_d):
                 self.regime_alert = False
                 self.alert_duration = 0
+                self.time_since_last_alert = 0
         else:
-            if any_crit_met:
+            self.time_since_last_alert += 1
+            # FIX-06: cooldown — don't re-fire within 14 sessions of last alert
+            if any_crit_met and self.time_since_last_alert >= 14:
                 self.regime_alert = True
                 self.alert_duration = 1
                 
         return self.regime_alert
 
-    def _cusum_check(self, series: list, threshold: float = 4.0, drift: float = 0.01) -> bool:
+    def _cusum_check(self, series: list, threshold: float = 8.0, drift: float = 0.05) -> bool:
         """CUSUM changepoint test. Better false-alarm rate than z-score when doom_std is outlier-inflated.
         threshold and drift are tunable — revisit once multi-week per-user data is available.
         FIXED: Use first-half mean only, apply CUSUM to second-half to avoid self-cancellation."""
-        if len(series) < 4:
+        if len(series) < 10:  # FIX-06: need 5+ points per half
             return False
         # Compute baseline from first half; test for shift in second half
         mu = float(np.mean(series[:len(series)//2]))
@@ -908,17 +947,28 @@ class DoomScorer:
             c_rapid = float(np.exp(-gap_min / gap_scale))
             
         # Use the latest entropy value (final state of session) instead of avg of historical states
-        final_entropy = session_df['ScrollRhythmEntropy'].iloc[-1] if 'ScrollRhythmEntropy' in session_df.columns else 0.0
-        entropy_base = max(0.75, float(baseline.entropy_baseline))
-        abs_auto = float(np.clip(1.0 - (final_entropy / 4.0), 0.0, 1.0))
-        rel_auto = float(np.clip((entropy_base - final_entropy) / max(entropy_base, 1.0), 0.0, 1.0))
-        c_auto = float(np.clip(0.45 * abs_auto + 0.55 * rel_auto, 0.0, 1.0))
+        if n_reels < 2:
+            # Entropy is undefined for 1-reel sessions — no deviation from baseline = no automaticity signal
+            c_auto = 0.0
+        else:
+            final_entropy = session_df['ScrollRhythmEntropy'].iloc[-1] if 'ScrollRhythmEntropy' in session_df.columns else 0.0
+            # Replace artifact zeros (from insufficient data) with the baseline
+            if final_entropy == 0.0 and n_reels < 3:
+                final_entropy = float(baseline.entropy_baseline)
+            entropy_base = max(0.75, float(baseline.entropy_baseline))
+            abs_auto = float(np.clip(1.0 - (final_entropy / 4.0), 0.0, 1.0))
+            rel_auto = float(np.clip((entropy_base - final_entropy) / max(entropy_base, 1.0), 0.0, 1.0))
+            c_auto = float(np.clip(0.45 * abs_auto + 0.55 * rel_auto, 0.0, 1.0))
         
         # Use latest trend value
-        trend_raw = session_df['SessionDwellTrend'].iloc[-1] if 'SessionDwellTrend' in session_df.columns else 0.0
-        trend_base = float(baseline.dwell_trend_mu)
-        trend_scale = max(0.25, min(3.0, 1.5 * float(baseline.dwell_trend_sig)))
-        c_collapse = float(np.clip((trend_base - trend_raw) / trend_scale, 0.0, 1.0))
+        if n_reels < 3:
+            # Trend is meaningless with fewer than 3 reels — slope has zero statistical reliability
+            c_collapse = 0.0
+        else:
+            trend_raw = session_df['SessionDwellTrend'].iloc[-1] if 'SessionDwellTrend' in session_df.columns else 0.0
+            trend_base = float(baseline.dwell_trend_mu)
+            trend_scale = max(0.25, min(3.0, 1.5 * float(baseline.dwell_trend_sig)))
+            c_collapse = float(np.clip((trend_base - trend_raw) / trend_scale, 0.0, 1.0))
         
         rewatch_sum = session_df['BackScrollCount'].sum() / n_reels
         # FIX (Bug 10): If no back-scrolls in session, rewatch_compulsion must be exactly 0, not clipped
@@ -1044,7 +1094,7 @@ class ReelioCLSE:
         
         self.h = np.array([0.15, 0.05])
         
-        self.num_features = 6
+        self.num_features = 7  # FIX-09: added SpeedDwellRatio
         self.feature_weights = np.ones(self.num_features) / self.num_features
         self.feature_mask = np.ones(self.num_features, dtype=bool)
         
@@ -1075,8 +1125,8 @@ class ReelioCLSE:
         return {
             'sum_xi': np.zeros((2, 2)),
             'sum_gamma': np.zeros(2),
-            'sum_x': np.zeros((6, 2)),
-            'sum_x2': np.zeros((6, 2)),
+            'sum_x': np.zeros((7, 2)),  # FIX-09: 7 features
+            'sum_x2': np.zeros((7, 2)),  # FIX-09: 7 features
             'sum_xy': np.zeros(2),
             'n_sessions': np.zeros(2),
             'sum_len': np.zeros(2)
@@ -1103,6 +1153,11 @@ class ReelioCLSE:
         self.p_bern[4, 1] = np.clip(exit_p * 2.5, 0.15, 0.90)   # doom: many failed exit attempts
         
         self.p_bern[5, :] = 0.5
+        
+        # FIX-09: Initialize SpeedDwellRatio (index 6) — Gaussian feature
+        self.mu[6, 0] = 0.5   # casual: moderate speed-to-dwell ratio
+        self.mu[6, 1] = 1.5   # doom: high speed + low dwell
+        self.sigma[6, :] = 0.5
         
         for bank in [self.SS_recent, self.SS_medium, self.SS_long]:
             bank['sum_gamma'] = np.array([2.0, 1.0])
@@ -1214,6 +1269,9 @@ class ReelioCLSE:
             ll += w[4] * self._log_emission_bernoulli(features[4], self.p_bern[4, state])
         if self.feature_mask[5]:
             ll += w[5] * self._log_emission_gaussian(features[5], self.mu[5, state], self.sigma[5, state])
+        # FIX-09: SpeedDwellRatio (index 6) — Gaussian
+        if self.num_features > 6 and self.feature_mask[6]:
+            ll += w[6] * self._log_emission_gaussian(features[6], self.mu[6, state], self.sigma[6, state])
             
         return ll
 
@@ -1639,9 +1697,18 @@ class ReelioCLSE:
         if 'StartTime' in df.columns and pd.notna(df['StartTime'].iloc[0]):
             session_timestamp = str(df['StartTime'].iloc[0])
             
-        # Replace binary flag with soft continuous feature
-        df['exit_flag'] = min(df['AppExitAttempts'].sum() / 5.0, 1.0) if 'AppExitAttempts' in df.columns else 0.0
-        obs = df[['log_dwell', 'log_speed', 'rhythm_dissociation', 'rewatch_flag', 'exit_flag', 'swipe_incomplete']].values
+        # FIX-05: Replace with log-normalized exit_flag, decoupled from ReturnLatencyS
+        if 'AppExitAttempts' in df.columns:
+            exit_raw = np.log1p(df['AppExitAttempts'].sum())
+            exit_baseline = max(np.log1p(baseline.exit_rate_baseline * len(df)), 1e-3)
+            df['exit_flag'] = float(np.clip(exit_raw / exit_baseline, 0.0, 1.0))
+        else:
+            df['exit_flag'] = 0.0
+        # FIX-09: Add SpeedDwellRatio to observation vector
+        if 'SpeedDwellRatio' not in df.columns:
+            dwell_vals = df['DwellTime'] if 'DwellTime' in df.columns else np.exp(df['log_dwell'])
+            df['SpeedDwellRatio'] = np.log1p(df['AvgScrollSpeed'].clip(lower=0)) / np.log1p(dwell_vals.clip(lower=0.1))
+        obs = df[['log_dwell', 'log_speed', 'rhythm_dissociation', 'rewatch_flag', 'exit_flag', 'swipe_incomplete', 'SpeedDwellRatio']].values
         
         if self.n_sessions_seen == 0:
             self._initialize_from_data(df, baseline)
@@ -2600,6 +2667,7 @@ def run_dashboard_payload(csv_data: str, state_path: str = None, survey_data: di
             "rewatch_flag":        float(model.feature_weights[3]),
             "exit_flag":           float(model.feature_weights[4]),
             "swipe_incomplete":    float(model.feature_weights[5]),
+            "speed_dwell_ratio":   float(model.feature_weights[6]) if len(model.feature_weights) > 6 else 0.0,
         },
         "scorer_component_weights": {
             "session_length":      float(scorer.component_weights[0]),
@@ -2642,9 +2710,16 @@ def run_dashboard_payload(csv_data: str, state_path: str = None, survey_data: di
         if isinstance(r.get('startTime'), str) and r['startTime'].startswith(_today_str)
     )
 
+    # FIX-03 + FIX-13: Apply calibration + frequency risk to captureRiskScore
+    _raw_st = float(results[-1]['S_t']) if results else 0.0
+    _calibrated_st = apply_calibration(_raw_st)
+    _baseline_daily = max(5.0, float(baseline.n_sessions_seen / max(1, days_monitored_count)) if hasattr(baseline, 'n_sessions_seen') else 5.0) if 'days_monitored_count' in dir() else 5.0
+    _freq_risk = compute_frequency_risk(_sessions_today, _baseline_daily)
+    _final_capture = max(_calibrated_st, _calibrated_st * (1 + _freq_risk * 0.5))
+
     output_payload.update({
         # Most-recent session's S_t on a 0-100 scale — used by header ring
-        "captureRiskScore": round(float(results[-1]['S_t']) * 100, 1) if results else None,
+        "captureRiskScore": round(_final_capture * 100, 1) if results else None,
         # Count of sessions tracked today — used by inactivity guard
         "sessionsToday": _sessions_today,
         # Current idle duration (now − last session end); null if endTime unknown
@@ -3373,12 +3448,15 @@ def _compute_weekly_summary_from_detector(detector) -> dict:
             'regret_calibration': {}
         }
 
+    # FIX-04: Align to calendar weeks (Monday-Sunday) instead of rolling 7 days
     anchor_ts = pd.Timestamp.now()
-    this_week_start = anchor_ts - pd.Timedelta(days=7)
-    last_week_start = anchor_ts - pd.Timedelta(days=14)
+    today = anchor_ts.floor('D')
+    days_since_monday = today.dayofweek
+    this_week_start = today - pd.Timedelta(days=days_since_monday)
+    last_week_start = this_week_start - pd.Timedelta(days=7)
 
-    this_week = [d for d, ts in timestamped if this_week_start < ts <= anchor_ts]
-    last_week = [d for d, ts in timestamped if last_week_start < ts <= this_week_start]
+    this_week = [d for d, ts in timestamped if this_week_start <= ts <= anchor_ts]
+    last_week = [d for d, ts in timestamped if last_week_start <= ts < this_week_start]
 
     this_week_doom = float(np.mean(this_week)) if this_week else 0.0
     last_week_doom = float(np.mean(last_week)) if last_week else 0.0
