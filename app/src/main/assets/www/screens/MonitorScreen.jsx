@@ -109,19 +109,18 @@ const MoodFace = ({ score, size = 100 }) => {
 
 // ─── HERO BLOCK ───────────────────────────────────────────────────────────────
 function HeroBlock({ data }) {
-    const idleSince = maybeNum(data.idleSinceLastSessionMin);
-    // Suppress stale doom state: no sessions today + away 2+ hours → neutral
-    const isIdleStale = safeNum(data.sessionsToday, 1) === 0
+    const idleSince = maybeNum(data?.idleSinceLastSessionMin);
+    const isIdleStale = safeNum(data?.sessionsToday, 1) === 0
         && isFiniteNumber(idleSince) && idleSince > 120;
-    const score = isIdleStale ? 0 : safeNum(data.captureRiskScore, 0);
+    const score = isIdleStale ? 0 : safeNum(data?.captureRiskScore, 0);
     const st = getState(score);
-    const summary = getHeroSummary(data);
+    const summary = getHeroSummary(data || {});
 
     // Alert chips
-    const timeSince = maybeNum(data.timeSinceLastSessionMin);
-    const avg = maybeNum(data.tenSessionAvgScore);
-    const doomStreak = maybeNum(data.doomStreak);
-    const mindfulStreak = maybeNum(data.mindfulStreak);
+    const timeSince = maybeNum(data?.timeSinceLastSessionMin);
+    const avg = maybeNum(data?.tenSessionAvgScore);
+    const doomStreak = maybeNum(data?.doomStreak);
+    const mindfulStreak = maybeNum(data?.mindfulStreak);
     const chips = [];
     if (isFiniteNumber(timeSince) && timeSince < 30)
         chips.push({ t: `Back in ${Math.max(1, Math.round(timeSince))}m`, dark: true });
@@ -206,6 +205,7 @@ function HeroBlock({ data }) {
 // ─── STATS BENTO ─────────────────────────────────────────────────────────────
 // Asymmetric: wide time tile (2fr) + two stacked small tiles (1fr)
 function StatsBento({ data }) {
+    data = data || {};
     const sessionsTodayRaw = maybeNum(data.sessionsToday);
     const captured = maybeNum(data.capturedSessionsToday);
     const sessions = isFiniteNumber(sessionsTodayRaw) ? sessionsTodayRaw : 0;
@@ -327,6 +327,7 @@ function StatsBento({ data }) {
 // ─── AUTOPILOT CARD ───────────────────────────────────────────────────────────
 // Clean navy. Left border accent. No muddy brown.
 function AutopilotCard({ data }) {
+    data = data || {};
     const doomRate = maybeNum(data.doomRate);
     const rate = isFiniteNumber(doomRate) ? Math.round(doomRate * 100) : null;
     const lastRates = safeArr(data.last3SessionAutopilotRates).filter(isFiniteNumber);
@@ -421,9 +422,9 @@ function AutopilotCard({ data }) {
 
 // ─── RING CARD — RADAR MAP ────────────────────────────────────────────────────
 function RingCard({ data }) {
-    const _rawScore = safeNum(data.captureRiskScore, 0);
-    const _idleSince = maybeNum(data.idleSinceLastSessionMin);
-    const _isIdleStale = safeNum(data.sessionsToday, 1) === 0
+    const _rawScore = safeNum(data?.captureRiskScore, 0);
+    const _idleSince = maybeNum(data?.idleSinceLastSessionMin);
+    const _isIdleStale = safeNum(data?.sessionsToday, 1) === 0
         && isFiniteNumber(_idleSince) && _idleSince > 120;
     const score = _isIdleStale ? 0 : _rawScore;
     const st = getState(score);
@@ -448,13 +449,13 @@ function RingCard({ data }) {
     // Build factors from actual model drivers (reelio_alse.py COMPONENT_NAMES)
     // label = short axis label for radar; fullLabel = full name shown in detail strip
     const driverDefs = [
-        { key: 'Session Length', short: 'Session', iconType: 'session', desc: 'How long your sessions last' },
-        { key: 'Exit Conflict', short: 'Exit', iconType: 'exit', desc: 'Difficulty closing the app' },
-        { key: 'Rapid Re-entry', short: 'Re-entry', iconType: 'reentry', desc: 'Speed of returning to app' },
-        { key: 'Scroll Automaticity', short: 'Scroll', iconType: 'scroll', desc: 'Mindless scrolling patterns' },
-        { key: 'Dwell Collapse', short: 'Dwell', iconType: 'dwell', desc: 'Shortening attention per reel' },
-        { key: 'Rewatch Compulsion', short: 'Rewatch', iconType: 'rewatch', desc: 'Repeated content consumption' },
-        { key: 'Environment', short: 'Environ.', iconType: 'environment', desc: 'Late-night or risky context' },
+        { key: 'Session Length', short: 'Session', iconType: 'session', desc: 'How long you stayed in the app' },
+        { key: 'Exit Conflict', short: 'Exit', iconType: 'exit', desc: 'How much you struggled to leave' },
+        { key: 'Rapid Re-entry', short: 'Return', iconType: 'reentry', desc: 'How quickly you came back after a break' },
+        { key: 'Scroll Automaticity', short: 'Rhythm', iconType: 'scroll', desc: 'How automatic your scrolling became' },
+        { key: 'Dwell Collapse', short: 'Focus', iconType: 'dwell', desc: 'How sharply your focus per reel dropped' },
+        { key: 'Rewatch Compulsion', short: 'Replay', iconType: 'rewatch', desc: 'How often you went back to rewatch content' },
+        { key: 'Environment', short: 'Context', iconType: 'environment', desc: 'Whether time, place, or late-night conditions made scrolling riskier' },
     ];
     const drivers = safeArr(data.doomDrivers);
     const factors = driverDefs.map(def => {
@@ -705,11 +706,11 @@ function RingCard({ data }) {
 
 // ─── SESSION PATTERNS ─────────────────────────────────────────────────────────
 function SessionPatterns({ data }) {
-    const avgDur = maybeNum(data.avgSessionDurationSec);
-    const avgReels = maybeNum(data.avgReelsPerSession);
-    const avgDwell = maybeNum(data.avgDwellTimeSec);
+    const avgDur = maybeNum(data?.avgSessionDurationSec);
+    const avgReels = maybeNum(data?.todayAvgReels) ?? maybeNum(data?.avgReelsPerSession);
+    const avgDwell = maybeNum(data?.avgDwellTimeSec);
     // True idle time (now − last session end) preferred; fall back to inter-session gap
-    const idleMinBase = maybeNum(data.idleSinceLastSessionMin) ?? maybeNum(data.timeSinceLastSessionMin);
+    const idleMinBase = maybeNum(data?.idleSinceLastSessionMin) ?? maybeNum(data?.timeSinceLastSessionMin);
     // Live-ticking idle counter: starts from payload value, increments every 60s
     const [idleMin, setIdleMin] = useState(idleMinBase);
     useEffect(() => {

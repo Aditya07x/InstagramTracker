@@ -61,14 +61,27 @@ object InteractionDetector {
 
     fun classifyStateChange(snapshot: InteractionSnapshot): InteractionType? {
         val combined = combinedText(snapshot)
-        if (containsIdToken(snapshot.viewIds, LIKE_ID_TOKENS) &&
-            (snapshot.selected || snapshot.checked || combined.contains("remove like"))) {
+        val words = extractWords(snapshot.labels + snapshot.viewIds)
+        val hasToggleState = snapshot.selected || snapshot.checked
+
+        val hasLikeSignal =
+            containsIdToken(snapshot.viewIds, LIKE_ID_TOKENS) ||
+            words.any { it in LIKE_WORD_TOKENS }
+
+        val hasSaveSignal =
+            containsIdToken(snapshot.viewIds, SAVE_ID_TOKENS) ||
+            words.any { it in SAVE_WORD_TOKENS }
+
+        if (hasLikeSignal &&
+            (hasToggleState || containsAnyPhrase(combined, setOf("remove like", "like removed")))) {
             return InteractionType.LIKE
         }
-        if (containsIdToken(snapshot.viewIds, SAVE_ID_TOKENS) &&
-            (snapshot.selected || snapshot.checked || combined.contains("remove from"))) {
+
+        if (hasSaveSignal &&
+            (hasToggleState || containsAnyPhrase(combined, setOf("remove from", "removed from saved", "added to saved", "added to collection")))) {
             return InteractionType.SAVE
         }
+
         return null
     }
 
@@ -121,6 +134,18 @@ object InteractionDetector {
     private val SAVE_ID_TOKENS    = setOf("save", "bookmark", "collection", "ribbon", "save_to_collection")
     private val SHARE_ID_TOKENS   = setOf("share", "send", "forward", "direct_share")
     private val COMMENT_ID_TOKENS = setOf("comment", "reply", "comment_button", "open_comments")
+
+    // Instagram sometimes emits state updates with no stable view IDs.
+    // These lexical fallbacks preserve LIKE/SAVE detection from labels/desc.
+    private val LIKE_WORD_TOKENS = setOf(
+        "like", "liked", "unlike", "heart",
+        "curtido", "curtir", "descurtido",
+        "gusta", "aime"
+    )
+    private val SAVE_WORD_TOKENS = setOf(
+        "save", "saved", "unsave", "bookmark", "collection",
+        "guardado", "guardar", "enregistrer", "enregistre"
+    )
 
     // ── Event handlers ────────────────────────────────────────────────────────
 
@@ -176,25 +201,15 @@ object InteractionDetector {
     }
 
     private fun detectFromStateChange(event: AccessibilityEvent): InteractionMatch {
-        val desc     = event.contentDescription?.toString()?.lowercase() ?: ""
-        val text     = event.text?.joinToString(" ")?.lowercase() ?: ""
-        val combined = "$desc $text"
-        val source   = event.source
-        val selected = source?.isSelected ?: false
-        val checked  = source?.isChecked ?: false
-        source?.recycle()
-        return when {
-            (selected || checked) && (combined.contains("like") || combined.contains("heart")) ->
-                InteractionMatch(
-                    type = InteractionType.LIKE,
-                    debugSummary = "state:like selected=$selected desc=$desc"
-                )
-            (selected || checked) && (combined.contains("save") || combined.contains("bookmark")) ->
-                InteractionMatch(
-                    type = InteractionType.SAVE,
-                    debugSummary = "state:save selected=$selected desc=$desc"
-                )
-            else -> InteractionMatch()
+        val snapshot = buildSnapshot(event)
+        val stateType = classifyStateChange(snapshot)
+        return if (stateType != null) {
+            InteractionMatch(
+                type = stateType,
+                debugSummary = "state:${stateType.name.lowercase()} ${snapshot.toDebugSummary()}"
+            )
+        } else {
+            InteractionMatch()
         }
     }
 
@@ -384,6 +399,12 @@ object InteractionDetector {
 
     private fun containsWord(text: String, word: String): Boolean {
         return Regex("\\b${Regex.escape(word)}\\b").containsMatchIn(text)
+    }
+
+    private fun containsAnyPhrase(text: String, phrases: Set<String>): Boolean {
+        return phrases.any { phrase ->
+            if (phrase.contains(" ")) text.contains(phrase) else containsWord(text, phrase)
+        }
     }
 
     private fun combinedText(snapshot: InteractionSnapshot): String =

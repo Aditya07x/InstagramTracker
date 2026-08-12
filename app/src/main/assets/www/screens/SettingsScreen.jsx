@@ -5,7 +5,7 @@ import {
 } from '../shared.jsx';
 
 // ─── SettingsScreen ───────────────────────────────────────────────────────────
-function SettingsScreen({ data }) {
+function SettingsScreen({ data, onShowOnboarding }) {
     const [surveyProb, setSurveyProb] = useState(0.3);
     const [sleepStart, setSleepStart] = useState(23);
     const [sleepEnd, setSleepEnd] = useState(7);
@@ -154,6 +154,17 @@ function SettingsScreen({ data }) {
                         display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8
                     }}>
                         <Download size={15} /> Export My Data
+                    </button>
+                    <button onClick={onShowOnboarding} style={{
+                        width: '100%', padding: '14px', borderRadius: 14,
+                        cursor: 'pointer', fontFamily: "'Space Grotesk', sans-serif",
+                        fontSize: 14, fontWeight: 700, letterSpacing: '0.02em',
+                        background: 'transparent',
+                        color: D.ink,
+                        border: `2px solid rgba(26,22,18,0.35)`,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8
+                    }}>
+                        View Onboarding
                     </button>
                     <button onClick={onReset} style={{
                         width: '100%', padding: '14px', borderRadius: 14,

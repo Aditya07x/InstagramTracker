@@ -66,7 +66,7 @@ def build_derived_features(csv_path: str) -> pd.DataFrame:
     df['InteractionBurstiness'] = df.groupby('SessionNum')['InteractionRate'].transform('std').fillna(0.0)
     
     # LikeStreakLength
-    df['LikeStreakLength'] = df.groupby('SessionNum')['Liked'].transform(lambda x: x.groupby((x != x.shift()).cumsum()).cumsum())
+    df['LikeStreakLength'] = df.groupby('SessionNum')['Liked'].transform(lambda x: x.groupby((x != x.shift()).cumsum()).cumsum()) * df['Liked']
     
     # InteractionDropoff
     def interaction_dropoff(group):
@@ -93,7 +93,7 @@ def build_derived_features(csv_path: str) -> pd.DataFrame:
     
     # Rough Entropy estimation (histogram binning)
     def calculate_entropy(x):
-        if len(x) < 2: return np.nan   # undefined, not zero
+        if len(x) < 2: return 0.0   # no rhythm to measure in a single reel
         counts, _ = np.histogram(x, bins=10, density=True)
         probs = counts / counts.sum()
         probs = probs[probs > 0]

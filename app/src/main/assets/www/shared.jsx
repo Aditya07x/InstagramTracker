@@ -555,6 +555,9 @@ const formatHourWindow = (hour, span = 2) => {
 const normalizeDateKey = (session) => {
     const startRaw = session?.startTime;
     if (typeof startRaw === "string" && startRaw && startRaw !== "Unknown") {
+        const match = startRaw.match(/^(\d{4}-\d{2}-\d{2})[T\s]/);
+        if (match) return match[1];
+
         const dt = new Date(startRaw);
         if (!Number.isNaN(dt.getTime())) {
             // Use LOCAL date components to avoid timezone cross-day misclassification.

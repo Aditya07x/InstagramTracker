@@ -47,11 +47,7 @@ const getDayCaptureWeight = (entry, personalBaselineSec = 180) => {
         ?? maybeNum(source.sessionDurationSec);
     if (!isFiniteNumber(durationSec) || durationSec <= 0) return 0.2;
 
-    const baseWeight = Math.min(durationSec / personalBaselineSec, 1);
-    if (durationSec < 30) return Math.max(0.06, baseWeight * 0.2);
-    if (durationSec < 60) return Math.max(0.12, baseWeight * 0.45);
-    if (durationSec < 120) return Math.max(0.3, baseWeight * 0.75);
-    return Math.max(0.45, baseWeight);
+    return Math.max(0.1, Math.min(durationSec / personalBaselineSec, 1));
 };
 
 const getDaySessionDisplayProbability = (session, personalBaselineSec = 180) => {
@@ -219,7 +215,6 @@ function DayDetailSheet({ dateStr, dayBucket, personalCaptureBaselineSec, onClos
                         const moodAfter = maybeNum(s.moodAfter);
                         const comparativeRating = maybeNum(s.comparativeRating);
                         const intendedAction = typeof s.intendedAction === 'string' ? s.intendedAction : '';
-                        const retroactiveLabel = Boolean(s.retroactiveLabel);
                         // Treat a session as surveyed only when at least one of the
                         // core survey fields is present. This guards against legacy
                         // payloads where hasSurvey may be true but all metrics are 0.
@@ -285,7 +280,7 @@ function DayDetailSheet({ dateStr, dayBucket, personalCaptureBaselineSec, onClos
                                                 background: 'rgba(58,158,111,0.10)', border: '1px solid rgba(58,158,111,0.20)', color: '#3A9E6F',
                                                 textTransform: 'uppercase', letterSpacing: '0.02em'
                                             }}>
-                                                {retroactiveLabel ? 'Retroactively Labeled' : 'Surveyed'}
+                                                Surveyed
                                             </span>
                                             {isFiniteNumber(postSessionRating) && postSessionRating > 0 && (
                                                 <span style={{ fontSize: 10, fontWeight: 700, padding: '3px 8px', borderRadius: 8, background: '#EEE9F5', color: '#6B3FA0' }}>
@@ -354,6 +349,9 @@ function CaptureCalendarScreen({ data }) {
     heatmap.forEach(d => {
         if (d.date) dayLookup[d.date] = d;
     });
+    const collectionStartDate = Object.keys(dateBuckets).length
+        ? Object.keys(dateBuckets).sort()[0]
+        : (heatmap.map((d) => d?.date).filter(Boolean).sort()[0] || null);
 
     const year = viewMonth.year;
     const month = viewMonth.month;
@@ -465,9 +463,12 @@ function CaptureCalendarScreen({ data }) {
                         const isToday = cell.day === today.getDate()
                             && month === today.getMonth()
                             && year === today.getFullYear();
-                        const isFuture = new Date(year, month, cell.day) > today;
+                        const cellDate = new Date(year, month, cell.day);
+                        const isFuture = cellDate > today;
+                        const hasTrackedWindowStarted = !!collectionStartDate && cell.dateStr >= collectionStartDate;
                         const state = isFiniteNumber(cell.avgCapture)
-                            ? stateFromCapture(cell.avgCapture) : null;
+                            ? stateFromCapture(cell.avgCapture)
+                            : (!isFuture && hasTrackedWindowStarted ? CAPTURE_STATES[3] : null);
 
                         if (isFuture || !state) {
                             return (

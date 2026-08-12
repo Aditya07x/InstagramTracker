@@ -315,7 +315,7 @@ function BlobCanvas() {
 }
 
 // ─── OnboardingState ──────────────────────────────────────────────────────────
-function OnboardingState() {
+function OnboardingState({ onContinue }) {
     const checkA11y = () => typeof window.Android?.isAccessibilityEnabled === 'function'
         ? !!window.Android.isAccessibilityEnabled()
         : false;
@@ -343,13 +343,15 @@ function OnboardingState() {
             @keyframes dotPulse { 0%,100% { opacity:0.4; transform: scale(1); } 50% { opacity:1; transform: scale(1.3); } }
         `}</style>
 
-        <div style={{
+        <div onClick={onContinue} style={{
             minHeight: "100vh",
             background: "#EDE8DF",
             position: "relative",
             overflow: "hidden",
             display: "flex",
             flexDirection: "column",
+            cursor: onContinue ? "pointer" : "default",
+            userSelect: "none",
         }}>
 
             {/* ── Decorative blobs ── */}
@@ -515,6 +517,22 @@ function OnboardingState() {
                 }}>
                     Open Instagram Reels — Reelio starts tracking automatically.
                 </p>
+
+                {/* Tap to continue */}
+                {onContinue && (
+                    <div style={{
+                        marginTop: 18,
+                        textAlign: "center",
+                        animation: "tagPop 0.5s ease 1.2s both",
+                    }}>
+                        <span style={{
+                            fontFamily: "'Nunito', sans-serif",
+                            fontSize: 13, fontWeight: 700,
+                            color: "rgba(26,22,18,0.32)",
+                            letterSpacing: "0.04em",
+                        }}>tap anywhere to continue</span>
+                    </div>
+                )}
             </div>
         </div>
         </>
@@ -540,27 +558,8 @@ function getSessionDisplayProbability(session, baselineSec = 180) {
 
 // ─── normalizeData ────────────────────────────────────────────────────────────
 function normalizeData(rawData) {
-    // Apply any window-scoped retroactive label cache before deriving views.
-    // This prevents a brief backend / cache lag from making freshly labeled
-    // sessions lose their survey chips or re-show the "Label this session"
-    // button after a few seconds.
-    const retroCache =
-        (typeof window !== "undefined" && window.__retroactiveLabelCache && typeof window.__retroactiveLabelCache === "object")
-            ? window.__retroactiveLabelCache
-            : {};
-
-    const mergeRetro = (sess) => {
-        if (!sess || typeof sess !== "object") return sess;
-        const sNum = sess.sessionNum != null ? String(sess.sessionNum) : "";
-        const sDate = typeof sess.date === "string" ? sess.date : "";
-        const cacheKey = `${sNum}|${sDate}`;
-        const override = retroCache[cacheKey];
-        return override ? { ...sess, ...override } : sess;
-    };
-
     const sessions = safeArr(rawData?.sessions)
-        .filter((s) => s && typeof s === "object")
-        .map(mergeRetro);
+        .filter((s) => s && typeof s === "object");
     const mostRecent = sessions[sessions.length - 1] || null;
     const sessionReels = sessions.map((s) => maybeNum(s.nReels)).filter(isFiniteNumber);
     const sessionDurations = sessions.map((s) => deriveSessionDurationSec(s)).filter(isFiniteNumber);
@@ -665,11 +664,6 @@ function normalizeData(rawData) {
             probability,
             isDoom: isFiniteNumber(probability) ? probability >= DOOM_THRESHOLD : Boolean(source.isDoom),
             _ts: ts,
-            // Session identity — needed for retroactive labeling bridge call
-            _sessionNum:  source.sessionNum  ?? null,
-            _sessionDate: source.date        ?? null,
-            _rawSessionNum: source._rawSessionNum ?? null,
-            _rawStartTime:  source._rawStartTime  ?? null,
             // Survey self-report labels
             postSessionRating:  maybeNum(source.postSessionRating) ?? 0,
             regretScore:        maybeNum(source.regretScore) ?? 0,
@@ -678,27 +672,13 @@ function normalizeData(rawData) {
             intendedAction:     source.intendedAction || "",
             actualVsIntended:   maybeNum(source.actualVsIntended) ?? 0,
             comparativeRating:  maybeNum(source.comparativeRating) ?? 0,
-            delayedRegretScore: maybeNum(source.delayedRegretScore) ?? 0,
             supervisedDoom:     maybeNum(source.supervisedDoom) ?? 0,
             hasSurvey:          Boolean(source.hasSurvey),
-            retroactiveLabel:   Boolean(source.retroactiveLabel),
             // Heuristic and confidence metadata for Fix 1
             heuristicScore:     maybeNum(source.heuristic_score) ?? 0,
             modelConf:          maybeNum(source.model_conf) ?? 1.0,
         };
     };
-
-    const providedTodaySource = safeArr(rawData?.todaySessions)
-        .filter((s) => s && typeof s === "object")
-        .map((s, idx) => {
-            const merged = mergeRetro(s);
-            return { raw: merged, idx, ts: pickSessionTimestampMs(merged), durationSec: deriveSessionDurationSec(merged) };
-        });
-
-    providedTodaySource.sort((a, b) => {
-        if (isFiniteNumber(a.ts) && isFiniteNumber(b.ts)) return a.ts - b.ts;
-        return a.idx - b.idx;
-    });
 
     // Fallback: use sessions bucketed under today's actual device date.
     // Do NOT use latestDateKey — it could be yesterday or include all sessions.
@@ -707,6 +687,19 @@ function normalizeData(rawData) {
     // are device-local time with no timezone suffix, so local components must be used.
     const _now = new Date();
     const deviceTodayKey = `${_now.getFullYear()}-${String(_now.getMonth() + 1).padStart(2, '0')}-${String(_now.getDate()).padStart(2, '0')}`;
+    const providedTodaySource = safeArr(rawData?.todaySessions)
+        .filter((s) => s && typeof s === "object")
+        .map((s, idx) => {
+            const merged = mergeRetro(s);
+            return { raw: merged, idx, ts: pickSessionTimestampMs(merged), durationSec: deriveSessionDurationSec(merged) };
+        })
+        .filter((entry) => normalizeDateKey(entry.raw) === deviceTodayKey);
+
+    providedTodaySource.sort((a, b) => {
+        if (isFiniteNumber(a.ts) && isFiniteNumber(b.ts)) return a.ts - b.ts;
+        return a.idx - b.idx;
+    });
+
     const deviceTodaySessions = dateBuckets[deviceTodayKey]
         ? [...dateBuckets[deviceTodayKey]].sort((a, b) => {
             if (isFiniteNumber(a.ts) && isFiniteNumber(b.ts)) return a.ts - b.ts;
@@ -723,6 +716,11 @@ function normalizeData(rawData) {
     });
 
     const todaySessions = todaySessionsDetailed.map(({ _ts, probability, ...rest }) => rest);
+
+    const todayReelCounts = todaySessionsDetailed
+        .map((s) => s.reelCount)
+        .filter(isFiniteNumber);
+    const derivedTodayAvgReels = todayReelCounts.length ? averageOf(todayReelCounts) : null;
 
     const todayDurationSecs = todaySessionsDetailed
         .map((s) => (isFiniteNumber(s.durationMin) ? s.durationMin * 60 : null))
@@ -1033,13 +1031,8 @@ function normalizeData(rawData) {
         const durationSec = isFiniteNumber(explicitDurationSec) ? explicitDurationSec : fallbackDurationSec;
         if (!isFiniteNumber(durationSec) || durationSec <= 0) return 0.2;
 
-        // Reach full influence by the user's recent median session duration,
-        // while still aggressively downweighting tiny sessions.
-        const baseWeight = Math.min(durationSec / personalCaptureBaselineSec, 1);
-        if (durationSec < 30) return Math.max(0.06, baseWeight * 0.2);
-        if (durationSec < 60) return Math.max(0.12, baseWeight * 0.45);
-        if (durationSec < 120) return Math.max(0.3, baseWeight * 0.75);
-        return Math.max(0.45, baseWeight);
+        // Scale influence gently based on the user's dynamic baseline length
+        return Math.max(0.1, Math.min(durationSec / personalCaptureBaselineSec, 1));
     };
 
     // Derive per-day heatmap from dateBuckets (real organic S_t data from ALSE).
@@ -1051,19 +1044,25 @@ function normalizeData(rawData) {
                 const prob = getSessionDisplayProbability(e.raw, personalCaptureBaselineSec);
                 if (!isFiniteNumber(prob)) return null;
                 const weight = getDailyCaptureWeight(e);
-                return weight > 0 ? { prob, weight } : null;
+                const isDoomSess = prob >= DOOM_THRESHOLD;
+                return weight > 0 ? { prob, weight, isDoomSess } : null;
             })
             .filter(Boolean);
         const totalWeight = weighted.length ? weighted.reduce((sum, e) => sum + e.weight, 0) : 0;
         const avgCapture = totalWeight > 0
             ? weighted.reduce((sum, e) => sum + (e.prob * e.weight), 0) / totalWeight
             : null;
+        
+        // Use the continuous avgCapture to ensure Dashboard graphs sync with the Calendar
+        const doomRate = avgCapture;
+
         const labels = deriveHeatmapLabels(dateKey, dateKey.slice(5));
         return {
             date: dateKey,
             dayLabel: labels.dayLabel,
             dateLabel: labels.dateLabel,
             avgCapture,
+            doomRate,
             riskLevel: null,
             sessionCount: bucket.length,
         };
@@ -1125,16 +1124,23 @@ function normalizeData(rawData) {
         };
     })();
 
+    const hasTodaySessionEvidence = todaySessionsDetailed.length > 0;
     const avgSessions = maybeNum(rawData?.avgSessions) ?? derivedAvgSessions;
-    const sessionsToday = maybeNum(rawData?.sessionsToday) ?? derivedSessionsToday;
-    const todayVsAvgDelta = maybeNum(rawData?.todayVsAvgDelta) ?? (
+    const sessionsToday = hasTodaySessionEvidence
+        ? (maybeNum(rawData?.sessionsToday) ?? derivedSessionsToday ?? todaySessionsDetailed.length)
+        : 0;
+    const todayVsAvgDelta = hasTodaySessionEvidence
+        ? (maybeNum(rawData?.todayVsAvgDelta) ?? (
         (isFiniteNumber(sessionsToday) && isFiniteNumber(avgSessions) && avgSessions > 0)
             ? ((sessionsToday - avgSessions) / avgSessions) * 100
             : null
-    );
+    ))
+        : null;
 
-    const activeTimeTodaySeconds = maybeNum(rawData?.activeTimeTodaySeconds) ?? derivedActiveTodaySeconds;
-    const activeTimeToday = (typeof rawData?.activeTimeToday === "string" && rawData.activeTimeToday)
+    const activeTimeTodaySeconds = hasTodaySessionEvidence
+        ? (maybeNum(rawData?.activeTimeTodaySeconds) ?? derivedActiveTodaySeconds)
+        : 0;
+    const activeTimeToday = hasTodaySessionEvidence && (typeof rawData?.activeTimeToday === "string" && rawData.activeTimeToday)
         ? rawData.activeTimeToday
         : (isFiniteNumber(activeTimeTodaySeconds) ? formatDurationSec(activeTimeTodaySeconds) : null);
 
@@ -1153,8 +1159,9 @@ function normalizeData(rawData) {
         sessionsToday,
         activeTimeToday,
         activeTimeTodaySeconds,
-        interactionsToday: maybeNum(rawData?.interactionsToday) ?? derivedInteractionsToday,
-        capturedSessionsToday: derivedCapturedToday ?? maybeNum(rawData?.capturedSessionsToday),
+        todayAvgReels: hasTodaySessionEvidence ? (maybeNum(rawData?.todayAvgReels) ?? derivedTodayAvgReels) : null,
+        interactionsToday: hasTodaySessionEvidence ? (maybeNum(rawData?.interactionsToday) ?? derivedInteractionsToday) : 0,
+        capturedSessionsToday: hasTodaySessionEvidence ? (derivedCapturedToday ?? maybeNum(rawData?.capturedSessionsToday)) : 0,
         avgSessionDurationSec: maybeNum(rawData?.avgSessionDurationSec) ?? derivedAvgSessionDurationSec,
         avgReelsPerSession: maybeNum(rawData?.avgReelsPerSession) ?? maybeNum(rawData?.avgNReels) ?? derivedAvgReelsPerSession,
         avgDwellTimeSec: maybeNum(rawData?.avgDwellTimeSec) ?? derivedAvgDwellTimeSec,
@@ -1191,7 +1198,9 @@ function normalizeData(rawData) {
         dataSinceDate,
         totalSessions: sessions.length,
         avgSessions,
-        avgActiveTimeTodaySeconds: maybeNum(rawData?.avgActiveTimeTodaySeconds) ?? derivedAvgActiveTimeTodaySeconds,
+        avgActiveTimeTodaySeconds: hasTodaySessionEvidence
+            ? (maybeNum(rawData?.avgActiveTimeTodaySeconds) ?? derivedAvgActiveTimeTodaySeconds)
+            : 0,
         last3SessionAutopilotRates: last3SessionAutopilotRates.length ? last3SessionAutopilotRates : derivedLast3SessionAutopilotRates,
         confidenceBreakdown: rawData?.model_confidence_breakdown || null
     };
@@ -1378,8 +1387,10 @@ export default function ReeliApp() {
     const [rawData, setRawData] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
-    // Splash: onboarding screen shows for ≥4s on cold start, or until data arrives (whichever is later)
+    // Splash: onboarding screen shows until user taps to continue
     const [splashDone, setSplashDone] = useState(false);
+    // Allow settings screen to re-show onboarding
+    const [forceOnboarding, setForceOnboarding] = useState(false);
 
     const checkA11y = () => typeof window.Android?.isAccessibilityEnabled === 'function'
         ? !!window.Android.isAccessibilityEnabled()
@@ -1400,12 +1411,6 @@ export default function ReeliApp() {
         const onStatus = e => setIsAccessibilityActive(!!e.detail);
         window.addEventListener('a11y-status', onStatus);
         return () => { clearInterval(id); window.removeEventListener('a11y-status', onStatus); };
-    }, []);
-
-    // 4-second splash timer
-    useEffect(() => {
-        const tid = setTimeout(() => setSplashDone(true), 4000);
-        return () => clearTimeout(tid);
     }, []);
 
     const openAccessibilitySettings = () => {
@@ -1458,54 +1463,8 @@ export default function ReeliApp() {
         };
     }, []);
 
-    // ─── Retroactive Label Polling ──────────────────────────────────────────
-    useEffect(() => {
-        if (!window.Android || typeof window.Android.drainPendingRetroactiveLabel !== 'function') return;
-
-        const poll = () => {
-            try {
-                const b64 = window.Android.drainPendingRetroactiveLabel();
-                if (b64 && b64.length > 0) {
-                    const json = atob(b64);
-                    const label = JSON.parse(json);
-                    console.log("[Bridge] Received retroactive label update:", label);
-                    // Also fire the global callback so DashboardToday + normalizeData
-                    // can persist the override via the window-level cache.
-                    if (typeof window.onRetroactiveLabelComplete === 'function') {
-                        try {
-                            window.onRetroactiveLabelComplete(b64);
-                        } catch (cbErr) {
-                            console.warn("[Bridge] onRetroactiveLabelComplete callback failed:", cbErr);
-                        }
-                    }
-                    
-                    setRawData(prev => {
-                        if (!prev) return prev;
-                        const patch = (list) => safeArr(list).map(s => {
-                            if (String(s.sessionNum) === String(label.sessionNum) && s.date === label.date) {
-                                return { ...s, ...label };
-                            }
-                            return s;
-                        });
-
-                        return {
-                            ...prev,
-                            sessions: patch(prev.sessions),
-                            todaySessions: patch(prev.todaySessions)
-                        };
-                    });
-                }
-            } catch (err) {
-                console.error("[Bridge] Failed to drain retroactive label:", err);
-            }
-        };
-
-        const id = setInterval(poll, 2000);
-        return () => clearInterval(id);
-    }, []);
-
     // Memoized — recomputes only when Kotlin pushes new rawData, not on every tab change or state update
-    const data = useMemo(() => (rawData ? normalizeData(rawData) : null), [rawData]);
+    const data = useMemo(() => (rawData ? normalizeData(rawData) : {}), [rawData]);
 
     if (loading) return <LoadingState />;
 
@@ -1517,9 +1476,12 @@ export default function ReeliApp() {
         );
     }
 
-    // Show onboarding when: no data at all, OR splash timer hasn't elapsed yet
+    // Show onboarding when: no data at all (and they haven't dismissed), OR user hasn't dismissed splash, OR settings forced it
     const hasData = rawData && safeArr(rawData.sessions).length > 0;
-    if (!hasData || !splashDone) return <OnboardingState />;
+    // We only force onboarding if they literally haven't tapped continue yet
+    if (!splashDone || forceOnboarding) {
+        return <OnboardingState onContinue={() => { setSplashDone(true); setForceOnboarding(false); }} />;
+    }
 
     return (
         <div style={{ display: "flex", justifyContent: "center", minHeight: "100vh", background: "#EDE8DF", alignItems: "flex-start" }}>
@@ -1538,7 +1500,7 @@ export default function ReeliApp() {
                     {screen === "home"      && <MonitorScreen data={data} />}
                     {screen === "calendar"  && <CaptureCalendarScreen data={data} />}
                     {screen === "dashboard" && <DashboardScreen data={data} />}
-                    {screen === "settings"  && <SettingsScreen data={data} />}
+                    {screen === "settings"  && <SettingsScreen data={data} onShowOnboarding={() => setForceOnboarding(true)} />}
                 </div>
 
                 <div className="tab-bar">

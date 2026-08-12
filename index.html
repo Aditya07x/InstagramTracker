@@ -2611,12 +2611,13 @@ app/src/main/assets/www/screens/CalendarScreen.jsx</div>
         },
         historical_drivers: cfg.driverWeights,
         feature_weights: [
-          { feature: "log_dwell", weight: 0.82, desc: "Log-transformed dwell time" },
-          { feature: "rhythm_dissociation", weight: 0.73, desc: "Cadence divergence" },
-          { feature: "exit_flag", weight: 0.66, desc: "Exit and return conflict" },
-          { feature: "log_speed", weight: 0.59, desc: "Log-transformed scroll speed" },
-          { feature: "rewatch_flag", weight: 0.54, desc: "Back-scroll signal" },
-          { feature: "swipe_incomplete", weight: 0.47, desc: "Aborted swipe proxy" }
+          { feature: "time spent per reel", weight: 0.82, desc: "How long you usually stay on each reel." },
+          { feature: "scroll rhythm", weight: 0.73, desc: "How uneven or automatic your scrolling rhythm feels." },
+          { feature: "exit struggle", weight: 0.66, desc: "Signals that you tried to leave but kept getting pulled back in." },
+          { feature: "scroll speed", weight: 0.59, desc: "How quickly you move through reels." },
+          { feature: "rewatching", weight: 0.54, desc: "How often you go back and replay recent reels." },
+          { feature: "sticky reels", weight: 0.47, desc: "Whether certain reels hold your attention much longer than the rest." },
+          { feature: "scroll variability", weight: 0.42, desc: "How much your pause timing changes within a session." }
         ],
         model_confidence_breakdown: {
           overall: Number(overallConf.toFixed(4)),
@@ -3791,6 +3792,23 @@ app/src/main/assets/www/screens/CalendarScreen.jsx</div>
         "</svg>";
     }
 
+    function featureWeightLabel(name) {
+      const key = String(name || "").trim().toLowerCase();
+      const labels = {
+        "log_dwell": "Time Spent Per Reel",
+        "log_speed": "Scroll Speed",
+        "rhythm_dissociation": "Scroll Rhythm",
+        "rewatch_intensity": "Rewatching",
+        "rewatch_flag": "Rewatching",
+        "exit_flag": "Exit Struggle",
+        "dwell_pctile": "Sticky Reels",
+        "scroll_interval_cv": "Scroll Variability",
+        "speed_dwell_ratio": "Scroll Variability",
+        "swipe_incomplete": "Sticky Reels"
+      };
+      return labels[key] || String(name || "Unlabeled signal");
+    }
+
     function renderFeatureWeights() {
       const root = document.getElementById("feature-weights");
       if (!root) return;
@@ -3811,7 +3829,7 @@ app/src/main/assets/www/screens/CalendarScreen.jsx</div>
 
         const head = document.createElement("div");
         head.className = "weight-head";
-        head.innerHTML = "<span>" + fw.feature + "</span><span>" + fw.weight.toFixed(2) + "</span>";
+        head.innerHTML = "<span>" + featureWeightLabel(fw.feature) + "</span><span>" + fw.weight.toFixed(2) + "</span>";
 
         const track = document.createElement("div");
         track.className = "weight-track";

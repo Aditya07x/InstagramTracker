@@ -8,9 +8,11 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.pdf.PdfDocument
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
 import android.webkit.JavascriptInterface
@@ -25,7 +27,6 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
-import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
@@ -42,7 +43,9 @@ class MainActivity : ComponentActivity() {
     private val executorService: ExecutorService = Executors.newSingleThreadExecutor()
     private val handler = Handler(Looper.getMainLooper())
     private var injectionRunnable: Runnable? = null
+    @Volatile private var latestResumeNonce: Long = 0L
     @Volatile private var isProcessing = false
+    @Volatile private var pendingInjectionRequest = false
     private lateinit var webView: WebView
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -112,7 +115,14 @@ class MainActivity : ComponentActivity() {
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
                 Log.d("ReactDashboard", "Page finished loading: $url")
-                injectDataWithDebounce(webView)
+                // Skip the Python recompute entirely when a fresh cached payload exists —
+                // previously this branch only applied on Vivo devices, so every other
+                // device re-ran run_dashboard_payload() on every cold start even when
+                // nothing had changed since the last computed hmm_results.json.
+                val usedCache = injectCachedPayloadIfAvailable(webView, reason = "onPageFinished")
+                if (!usedCache) {
+                    injectDataWithDebounce(webView)
+                }
             }
 
             override fun onReceivedError(view: WebView?, request: android.webkit.WebResourceRequest?, error: android.webkit.WebResourceError?) {
@@ -160,26 +170,18 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         if (::webView.isInitialized) {
+            val resumeNonce = System.currentTimeMillis()
+            latestResumeNonce = resumeNonce
+
             // Re-trigger update in case permissions changed while app was configured in settings
             val isEnabled = isAccessibilityServiceEnabled()
             val jsCode = "if(window.updateServiceStatus) window.updateServiceStatus($isEnabled);"
             webView.evaluateJavascript(jsCode, null)
 
+            maybePromptVivoBatteryProtection()
+
             // Instant transition: inject cached JSON immediately if available
-            val cachedFile = File(filesDir, "hmm_results.json")
-            if (cachedFile.exists() && cachedFile.length() > 50) {
-                try {
-                    val cachedJson = mergePendingRetroactiveLabelIntoPayload(cachedFile.readText())
-                    val b64 = android.util.Base64.encodeToString(
-                        cachedJson.toByteArray(Charsets.UTF_8),
-                        android.util.Base64.NO_WRAP
-                    )
-                    injectWhenReady(webView, b64)
-                    Log.d("ReactDashboard", "Cached data injection triggered via polling")
-                } catch (e: Exception) {
-                    Log.w("ReactDashboard", "Cache inject failed: ${e.message}")
-                }
-            }
+            val usedCachedPayload = injectCachedPayloadIfAvailable(webView, reason = "onResume")
 
             // Ensure we aren't showing a blank page if it failed to load earlier
             if (webView.url == null || webView.url == "about:blank") {
@@ -187,47 +189,21 @@ class MainActivity : ComponentActivity() {
                 webView.loadUrl("file:///android_asset/www/index.html")
             } else {
                 // Background refresh with latest data
-                injectDataWithDebounce(webView)
+                if (isVivoFamilyDevice() && usedCachedPayload) {
+                    Log.d("ReactDashboard", "Vivo memory mode: skipped eager dashboard refresh on resume")
+                } else {
+                    injectDataWithDebounce(webView)
+                }
             }
         }
     }
 
-    private fun mergePendingRetroactiveLabelIntoPayload(jsonContent: String): String {
-        val prefs = getSharedPreferences("InstaTrackerPrefs", Context.MODE_PRIVATE)
-        val b64 = prefs.getString("pending_retroactive_label_b64", null) ?: return jsonContent
-        val ts = prefs.getLong("pending_retroactive_label_ts", 0L)
-        if (System.currentTimeMillis() - ts > 5 * 60 * 1000L) return jsonContent
-
-        return try {
-            val label = JSONObject(String(android.util.Base64.decode(b64, android.util.Base64.DEFAULT), Charsets.UTF_8))
-            val root = JSONObject(jsonContent)
-            val sessionNum = label.optString("sessionNum", "")
-            val sessionDate = label.optString("date", "")
-            var patched = false
-
-            fun patchSessions(arr: JSONArray?) {
-                if (arr == null) return
-                for (i in 0 until arr.length()) {
-                    val sess = arr.optJSONObject(i) ?: continue
-                    val matchesNum = sess.optString("sessionNum", "") == sessionNum
-                    val matchesDate = sess.optString("date", "") == sessionDate
-                    if (!matchesNum || !matchesDate) continue
-                    val keys = label.keys()
-                    while (keys.hasNext()) {
-                        val key = keys.next()
-                        sess.put(key, label.get(key))
-                    }
-                    patched = true
-                }
-            }
-
-            patchSessions(root.optJSONArray("sessions"))
-            patchSessions(root.optJSONArray("todaySessions"))
-
-            if (patched) root.toString() else jsonContent
-        } catch (e: Exception) {
-            Log.w("ReactDashboard", "Failed to merge pending retroactive label into payload: ${e.message}")
-            jsonContent
+    override fun onStop() {
+        super.onStop()
+        if (isVivoFamilyDevice() && !isChangingConfigurations && !isFinishing) {
+            // Release heavy WebView memory on background to reduce OEM low-memory kills.
+            Log.d("MainActivity", "Vivo memory mode: finishing activity in background")
+            finish()
         }
     }
 
@@ -245,7 +221,8 @@ class MainActivity : ComponentActivity() {
 
         injectionRunnable = Runnable {
             if (isProcessing) {
-                Log.w("ReactDashboard", "Already processing, skipping injection")
+                Log.w("ReactDashboard", "Already processing, marking pending injection request")
+                pendingInjectionRequest = true
                 return@Runnable
             }
             isProcessing = true
@@ -295,8 +272,6 @@ class MainActivity : ComponentActivity() {
                         }
                     }
 
-                    jsonContent = mergePendingRetroactiveLabelIntoPayload(jsonContent)
-
                     if (jsonContent.isEmpty() || jsonContent == "{}" || jsonContent == "null") {
                         handler.post {
                             injectErrorToReact(webView, "No sufficient data yet. Scroll a few more reels!")
@@ -322,6 +297,10 @@ class MainActivity : ComponentActivity() {
                     }
                 } finally {
                     isProcessing = false
+                    if (pendingInjectionRequest) {
+                        pendingInjectionRequest = false
+                        handler.post { injectDataWithDebounce(webView) }
+                    }
                 }
             }
         }
@@ -337,7 +316,8 @@ class MainActivity : ComponentActivity() {
             } else if (attemptsLeft > 0) {
                 handler.postDelayed({ injectWhenReady(webView, b64, attemptsLeft - 1) }, 150)
             } else {
-                injectErrorToReact(webView, "Dashboard failed to initialise")
+                Log.e("ReactDashboard", "injectWhenReady: JS not ready after max attempts, re-queuing")
+                handler.post { injectDataWithDebounce(webView) }
             }
         }
     }
@@ -357,6 +337,102 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun injectCachedPayloadIfAvailable(targetWebView: WebView, reason: String = "unknown"): Boolean {
+        val cachedFile = File(filesDir, "hmm_results.json")
+        val csvFile = File(filesDir, "insta_data.csv")
+        
+        if (!cachedFile.exists() || cachedFile.length() <= 50) {
+            return false
+        }
+
+        // Invalidate cache if CSV is meaningfully newer
+        val MIN_CACHE_STALENESS_MS = 30_000L
+        if (csvFile.exists() && csvFile.lastModified() > cachedFile.lastModified() + MIN_CACHE_STALENESS_MS) {
+            Log.d("ReactDashboard", "Cache invalidated: CSV is newer than cached hmm_results.json")
+            return false
+        }
+
+        val resumeNonce = latestResumeNonce
+        executorService.execute {
+            try {
+                val cachedJson = cachedFile.readText()
+                val b64 = android.util.Base64.encodeToString(
+                    cachedJson.toByteArray(Charsets.UTF_8),
+                    android.util.Base64.NO_WRAP
+                )
+                handler.post {
+                    if (!::webView.isInitialized || isFinishing || isDestroyed || latestResumeNonce != resumeNonce) {
+                        return@post
+                    }
+                    injectWhenReady(targetWebView, b64)
+                    Log.d("ReactDashboard", "Cached data injection triggered via polling ($reason)")
+                }
+            } catch (e: Exception) {
+                Log.w("ReactDashboard", "Cache inject failed ($reason): ${e.message}")
+            }
+        }
+        return true
+    }
+
+    private fun isVivoFamilyDevice(): Boolean {
+        val manufacturer = Build.MANUFACTURER?.lowercase() ?: ""
+        return manufacturer.contains("vivo") || manufacturer.contains("iqoo") || manufacturer.contains("bbk")
+    }
+
+    private fun maybePromptVivoBatteryProtection() {
+        if (!isVivoFamilyDevice()) return
+
+        val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
+        val isWhitelisted = powerManager?.isIgnoringBatteryOptimizations(packageName) == true
+        if (isWhitelisted) return
+
+        val prefs = getSharedPreferences("InstaTrackerPrefs", Context.MODE_PRIVATE)
+        val now = System.currentTimeMillis()
+        val lastPromptAt = prefs.getLong("last_vivo_battery_prompt_at", 0L)
+        if (now - lastPromptAt < TimeUnit.HOURS.toMillis(12)) return
+        prefs.edit().putLong("last_vivo_battery_prompt_at", now).apply()
+
+        AlertDialog.Builder(this)
+            .setTitle("Keep Reelio running")
+            .setMessage("Your device is force-stopping Reelio in the background. Open battery settings and allow background activity/autostart for Reelio.")
+            .setPositiveButton("Open Settings") { _, _ ->
+                openBatteryProtectionSettings()
+            }
+            .setNegativeButton("Later", null)
+            .show()
+    }
+
+    private fun openBatteryProtectionSettings() {
+        val candidates = listOf(
+            Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")),
+            Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS),
+            Intent().setClassName("com.iqoo.secure", "com.iqoo.secure.ui.phoneoptimize.BgStartUpManager"),
+            Intent().setClassName("com.iqoo.secure", "com.iqoo.secure.MainActivity"),
+            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))
+        )
+
+        val launched = launchFirstResolvableIntent(candidates)
+        if (!launched) {
+            android.widget.Toast.makeText(this, "Could not open battery settings automatically", android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun launchFirstResolvableIntent(candidates: List<Intent>): Boolean {
+        for (intent in candidates) {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            val resolved = intent.resolveActivity(packageManager)
+            if (resolved != null) {
+                return try {
+                    startActivity(intent)
+                    true
+                } catch (_: Exception) {
+                    false
+                }
+            }
+        }
+        return false
+    }
+
     fun isAccessibilityServiceEnabled(): Boolean {
         val am = getSystemService(Context.ACCESSIBILITY_SERVICE) as android.view.accessibility.AccessibilityManager
         val enabledServices = am.getEnabledAccessibilityServiceList(android.accessibilityservice.AccessibilityServiceInfo.FEEDBACK_GENERIC)
@@ -364,9 +440,22 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        super.onDestroy()
         injectionRunnable?.let { handler.removeCallbacks(it) }
+        if (::webView.isInitialized) {
+            try {
+                webView.stopLoading()
+                webView.loadUrl("about:blank")
+                webView.webChromeClient = WebChromeClient()
+                webView.webViewClient = WebViewClient()
+                webView.removeJavascriptInterface("Android")
+                webView.removeAllViews()
+                webView.destroy()
+            } catch (e: Exception) {
+                Log.w("MainActivity", "WebView cleanup failed: ${e.message}")
+            }
+        }
         executorService.shutdown()
+        super.onDestroy()
     }
 
     inner class WebAppInterface(private val mContext: Context) {
@@ -501,43 +590,6 @@ class MainActivity : ComponentActivity() {
             return "$start,$end"
         }
 
-        @JavascriptInterface
-        fun openRetroactiveSurvey(sessionNumStr: String, date: String, predSummary: String, prefillJson: String) {
-            android.util.Log.d("ReactDashboard", "[Bridge] openRetroactiveSurvey called (Main) with: sessionNum=$sessionNumStr, date=$date")
-            val sessionNum = sessionNumStr.toIntOrNull()
-            if (sessionNum == null) {
-                android.util.Log.e("ReactDashboard", "[Bridge] Aborting (Main): sessionNum '$sessionNumStr' is not a valid integer")
-                return
-            }
-            try {
-                val intent = android.content.Intent(mContext, RetroactiveSurveyActivity::class.java).apply {
-                    putExtra("session_num",         sessionNum)
-                    putExtra("session_date",        date)
-                    putExtra("prediction_summary",  predSummary)
-                    putExtra("prefill_json",         prefillJson)
-                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                mContext.startActivity(intent)
-                android.util.Log.d("ReactDashboard", "[Bridge] Activity launch triggered (Main) for session $sessionNum")
-            } catch (e: Exception) {
-                android.util.Log.e("ReactDashboard", "[Bridge] Failed to launch activity (Main): ${e.message}", e)
-            }
-        }
-
-        @JavascriptInterface
-        fun drainPendingRetroactiveLabel(): String {
-            val prefs = mContext.getSharedPreferences("InstaTrackerPrefs", Context.MODE_PRIVATE)
-            val b64 = prefs.getString("pending_retroactive_label_b64", "") ?: ""
-            if (b64.isNotEmpty()) {
-                // Remove once read to prevent duplicate triggers
-                prefs.edit()
-                    .remove("pending_retroactive_label_b64")
-                    .remove("pending_retroactive_label_ts")
-                    .apply()
-                android.util.Log.d("ReactDashboard", "[Bridge] Drained pending retroactive label (Main) (Base64 length: ${b64.length})")
-            }
-            return b64
-        }
 
         private fun isCacheValid(hmmFile: File, csvFile: File): Boolean {
             // 1. Cache must be newer than CSV

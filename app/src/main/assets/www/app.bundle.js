@@ -534,6 +534,8 @@
   const normalizeDateKey = (session) => {
     const startRaw = session?.startTime;
     if (typeof startRaw === "string" && startRaw && startRaw !== "Unknown") {
+      const match = startRaw.match(/^(\d{4}-\d{2}-\d{2})[T\s]/);
+      if (match) return match[1];
       const dt = new Date(startRaw);
       if (!Number.isNaN(dt.getTime())) {
         const y = dt.getFullYear();
@@ -743,15 +745,15 @@
     return /* @__PURE__ */ React.createElement("svg", { width: size, height: size, viewBox: `0 0 ${size} ${size}`, fill: "none", style: { overflow: "visible" } }, faces[type]);
   };
   function HeroBlock({ data }) {
-    const idleSince = maybeNum(data.idleSinceLastSessionMin);
-    const isIdleStale = safeNum(data.sessionsToday, 1) === 0 && isFiniteNumber(idleSince) && idleSince > 120;
-    const score = isIdleStale ? 0 : safeNum(data.captureRiskScore, 0);
+    const idleSince = maybeNum(data?.idleSinceLastSessionMin);
+    const isIdleStale = safeNum(data?.sessionsToday, 1) === 0 && isFiniteNumber(idleSince) && idleSince > 120;
+    const score = isIdleStale ? 0 : safeNum(data?.captureRiskScore, 0);
     const st = getState(score);
-    const summary = getHeroSummary(data);
-    const timeSince = maybeNum(data.timeSinceLastSessionMin);
-    const avg = maybeNum(data.tenSessionAvgScore);
-    const doomStreak = maybeNum(data.doomStreak);
-    const mindfulStreak = maybeNum(data.mindfulStreak);
+    const summary = getHeroSummary(data || {});
+    const timeSince = maybeNum(data?.timeSinceLastSessionMin);
+    const avg = maybeNum(data?.tenSessionAvgScore);
+    const doomStreak = maybeNum(data?.doomStreak);
+    const mindfulStreak = maybeNum(data?.mindfulStreak);
     const chips = [];
     if (isFiniteNumber(timeSince) && timeSince < 30)
       chips.push({ t: `Back in ${Math.max(1, Math.round(timeSince))}m`, dark: true });
@@ -818,6 +820,7 @@
     } }, chip.t))));
   }
   function StatsBento({ data }) {
+    data = data || {};
     const sessionsTodayRaw = maybeNum(data.sessionsToday);
     const captured = maybeNum(data.capturedSessionsToday);
     const sessions = isFiniteNumber(sessionsTodayRaw) ? sessionsTodayRaw : 0;
@@ -910,6 +913,7 @@
     })()))));
   }
   function AutopilotCard({ data }) {
+    data = data || {};
     const doomRate = maybeNum(data.doomRate);
     const rate = isFiniteNumber(doomRate) ? Math.round(doomRate * 100) : null;
     const lastRates = safeArr(data.last3SessionAutopilotRates).filter(isFiniteNumber);
@@ -969,9 +973,9 @@
     }), Array.from({ length: Math.max(0, 7 - display.length) }).map((_, i) => /* @__PURE__ */ React.createElement("div", { key: `e${i}`, style: { width: 14, height: 14, borderRadius: "50%", border: "1.5px solid rgba(26,22,18,0.15)" } })), display.length > 0 && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "'Nunito', sans-serif", fontSize: 10, fontWeight: 700, color: "#9A8E84", marginLeft: 4 } }, "last ", display.length))));
   }
   function RingCard({ data }) {
-    const _rawScore = safeNum(data.captureRiskScore, 0);
-    const _idleSince = maybeNum(data.idleSinceLastSessionMin);
-    const _isIdleStale = safeNum(data.sessionsToday, 1) === 0 && isFiniteNumber(_idleSince) && _idleSince > 120;
+    const _rawScore = safeNum(data?.captureRiskScore, 0);
+    const _idleSince = maybeNum(data?.idleSinceLastSessionMin);
+    const _isIdleStale = safeNum(data?.sessionsToday, 1) === 0 && isFiniteNumber(_idleSince) && _idleSince > 120;
     const score = _isIdleStale ? 0 : _rawScore;
     const st = getState(score);
     const meta = getRiskMeta(score);
@@ -991,13 +995,13 @@
       return () => cancelAnimationFrame(raf);
     }, [score]);
     const driverDefs = [
-      { key: "Session Length", short: "Session", iconType: "session", desc: "How long your sessions last" },
-      { key: "Exit Conflict", short: "Exit", iconType: "exit", desc: "Difficulty closing the app" },
-      { key: "Rapid Re-entry", short: "Re-entry", iconType: "reentry", desc: "Speed of returning to app" },
-      { key: "Scroll Automaticity", short: "Scroll", iconType: "scroll", desc: "Mindless scrolling patterns" },
-      { key: "Dwell Collapse", short: "Dwell", iconType: "dwell", desc: "Shortening attention per reel" },
-      { key: "Rewatch Compulsion", short: "Rewatch", iconType: "rewatch", desc: "Repeated content consumption" },
-      { key: "Environment", short: "Environ.", iconType: "environment", desc: "Late-night or risky context" }
+      { key: "Session Length", short: "Session", iconType: "session", desc: "How long you stayed in the app" },
+      { key: "Exit Conflict", short: "Exit", iconType: "exit", desc: "How much you struggled to leave" },
+      { key: "Rapid Re-entry", short: "Return", iconType: "reentry", desc: "How quickly you came back after a break" },
+      { key: "Scroll Automaticity", short: "Rhythm", iconType: "scroll", desc: "How automatic your scrolling became" },
+      { key: "Dwell Collapse", short: "Focus", iconType: "dwell", desc: "How sharply your focus per reel dropped" },
+      { key: "Rewatch Compulsion", short: "Replay", iconType: "rewatch", desc: "How often you went back to rewatch content" },
+      { key: "Environment", short: "Context", iconType: "environment", desc: "Whether time, place, or late-night conditions made scrolling riskier" }
     ];
     const drivers = safeArr(data.doomDrivers);
     const factors = driverDefs.map((def) => {
@@ -1035,15 +1039,14 @@
     const leadPct = Math.max(0, ...factors.map((f) => f.pct));
     const baselineWindow = Math.max(8, leadPct - baselinePct);
     const signalScore = (factor) => {
-      if (!factor || factor.pct <= 0 || leadPct <= 0)
-        return 0;
+      if (!factor || factor.pct <= 0 || leadPct <= 0) return 0;
       const aboveBaseline = Math.max(0, factor.pct - baselinePct);
       const baselineComponent = Math.min(1, aboveBaseline / baselineWindow);
       const leaderComponent = Math.min(1, factor.pct / Math.max(leadPct, baselinePct));
       return Math.round(Math.min(100, baselineComponent * 65 + leaderComponent * 35));
     };
-    const sevColor = (score) => score >= 75 ? "#C4563A" : score >= 45 ? "#C4973A" : score >= 20 ? "#6B3FA0" : "#3A9E6F";
-    const sevLabel = (score) => score >= 75 ? "Dominant" : score >= 45 ? "Active" : score >= 20 ? "Present" : "Background";
+    const sevColor = (score2) => score2 >= 75 ? "#C4563A" : score2 >= 45 ? "#C4973A" : score2 >= 20 ? "#6B3FA0" : "#3A9E6F";
+    const sevLabel = (score2) => score2 >= 75 ? "Dominant" : score2 >= 45 ? "Active" : score2 >= 20 ? "Present" : "Background";
     const handleTap = (i) => setActive((prev) => prev === i ? null : i);
     const af = active !== null ? factors[active] : null;
     return /* @__PURE__ */ React.createElement("div", { style: { padding: "0 16px" } }, /* @__PURE__ */ React.createElement("div", { style: {
@@ -1253,10 +1256,10 @@
     } }, sevLabel(signalScore(af))))));
   }
   function SessionPatterns({ data }) {
-    const avgDur = maybeNum(data.avgSessionDurationSec);
-    const avgReels = maybeNum(data.avgReelsPerSession);
-    const avgDwell = maybeNum(data.avgDwellTimeSec);
-    const idleMinBase = maybeNum(data.idleSinceLastSessionMin) ?? maybeNum(data.timeSinceLastSessionMin);
+    const avgDur = maybeNum(data?.avgSessionDurationSec);
+    const avgReels = maybeNum(data?.todayAvgReels) ?? maybeNum(data?.avgReelsPerSession);
+    const avgDwell = maybeNum(data?.avgDwellTimeSec);
+    const idleMinBase = maybeNum(data?.idleSinceLastSessionMin) ?? maybeNum(data?.timeSinceLastSessionMin);
     const [idleMin, setIdleMin] = useState(idleMinBase);
     useEffect(() => {
       setIdleMin(idleMinBase);
@@ -1424,21 +1427,6 @@
     const timeline = safeArr(data.todaySessions);
     const [selectedTimelineIdx, setSelectedTimelineIdx] = useState(null);
     const [expandedFactors, setExpandedFactors] = useState({});
-    const [retroactiveOverrides, setRetroactiveOverrides] = useState({});
-    useEffect(() => {
-      window.onRetroactiveLabelComplete = (b64) => {
-        try {
-          const label = JSON.parse(atob(b64));
-          const key = String(label.sessionNum);
-          setRetroactiveOverrides((prev) => ({ ...prev, [key]: label }));
-        } catch (e) {
-          console.error("onRetroactiveLabelComplete parse error:", e);
-        }
-      };
-      return () => {
-        window.onRetroactiveLabelComplete = void 0;
-      };
-    }, []);
     const circadian = safeArr(data.circadianProfile);
     const circData = circadian;
     const factorConfig = {
@@ -1531,73 +1519,10 @@
         });
       })()));
     })(), selectedTimelineIdx !== null && timeline[selectedTimelineIdx] && (() => {
-      const rawSel = timeline[selectedTimelineIdx];
-      const override = retroactiveOverrides[String(rawSel._sessionNum)] ?? null;
-      const sel = override ? { ...rawSel, ...override } : rawSel;
-      const hasSurvey = maybeNum(sel.postSessionRating) > 0 || maybeNum(sel.regretScore) > 0 || maybeNum(sel.moodAfter) > 0 || maybeNum(sel.comparativeRating) > 0 || maybeNum(sel.delayedRegretScore) > 0;
-      return /* @__PURE__ */ React.createElement("div", { style: { marginTop: 10 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: D.muted } }, (sel.startTime || "--:--").slice(0, 5), " \xB7 ", isFiniteNumber(maybeNum(sel.durationMin)) ? `${Math.round(sel.durationMin)} min` : "duration unavailable", " \xB7 ", isFiniteNumber(maybeNum(sel.reelCount)) ? `${Math.round(sel.reelCount)} reels` : "reel count unavailable"), hasSurvey && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 } }, maybeNum(sel.postSessionRating) > 0 && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 8, background: "#EEE9F5", color: "#6B3FA0" } }, "Rating ", sel.postSessionRating, "/5"), maybeNum(sel.regretScore) > 0 && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 8, background: sel.regretScore >= 4 ? "#F5EDE9" : "#EAF3EE", color: sel.regretScore >= 4 ? "#C4563A" : "#2A7A54" } }, "Regret ", sel.regretScore, "/5"), maybeNum(sel.moodAfter) > 0 && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 8, background: "#EEE9F5", color: "#6B3FA0" } }, "Mood ", sel.moodAfter, "/5"), maybeNum(sel.comparativeRating) > 0 && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 8, background: "#F5F0E2", color: "#9A7020" } }, "Experience ", sel.comparativeRating, "/5"), sel.intendedAction && sel.intendedAction !== "0" && sel.intendedAction !== "0.0" && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 8, background: "#F5F0E2", color: "#9A7020" } }, "Intent: ", sel.intendedAction), sel.retroactiveLabel && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 8, background: "#F0EBF8", color: "#6B3FA0", opacity: 0.75 } }, "\u270E retroactive")), !hasSurvey && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 6 } }, sel.isDoom !== void 0 && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: D.muted, opacity: 0.7, marginBottom: 5 } }, "Reelio said: ", /* @__PURE__ */ React.createElement("strong", { style: { color: sel.isDoom ? D.danger : D.safe } }, sel.isDoom ? "Autopilot" : "Mindful"), sel.modelConf < 0.7 && /* @__PURE__ */ React.createElement("span", { style: { marginLeft: 6, fontSize: 9, background: `${D.warn}15`, color: D.warn, padding: "1px 5px", borderRadius: 4, fontWeight: 800 } }, "HEURISTIC BLEND (", (sel.modelConf * 100).toFixed(0), "% CONF)")), sel.modelConf < 0.7 && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 6, fontSize: 10, color: D.muted, lineHeight: 1.4, padding: "8px 10px", background: `${D.warn}05`, borderRadius: 10, border: `1px solid ${D.warn}15` } }, /* @__PURE__ */ React.createElement("div", { style: { color: D.warn, fontWeight: 900, marginBottom: 2 } }, "\u26A0\uFE0F Behavioral Calibration Active"), "Current model confidence is low (", (sel.modelConf * 100).toFixed(0), "%). Reelio is blending HMM state inference with heuristic scoring (", Math.round(sel.heuristicScore * 100), "%) to ensure capture events are not missed during learning."), hasSurvey && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6, marginTop: 8 } }, /* @__PURE__ */ React.createElement("div", { style: { padding: "4px 10px", background: "rgba(58,158,111,0.1)", border: "1px solid rgba(58,158,111,0.2)", borderRadius: 8, display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement("svg", { width: "12", height: "12", viewBox: "0 0 24 24", fill: "none", stroke: "#3A9E6F", strokeWidth: "3", strokeLinecap: "round", strokeLinejoin: "round" }, /* @__PURE__ */ React.createElement("polyline", { points: "20 6 9 17 4 12" })), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontWeight: 900, color: "#3A9E6F", textTransform: "uppercase", letterSpacing: "0.02em" } }, sel.retroactiveLabel ? "Retroactively Labeled" : "Surveyed"))), sel._sessionNum != null && sel._sessionDate && !hasSurvey && /* @__PURE__ */ React.createElement(
-        "button",
-        {
-          onClick: () => {
-            const predSummary = sel.isDoom !== void 0 ? `Reelio said: ${sel.isDoom ? "Autopilot" : "Mindful"}` : "";
-            const prefill = JSON.stringify({
-              postSessionRating: sel.postSessionRating || 0,
-              regretScore: sel.regretScore || 0,
-              moodBefore: sel.moodBefore || 0,
-              moodAfter: sel.moodAfter || 0,
-              intendedAction: sel.intendedAction || "",
-              comparativeRating: sel.comparativeRating || 0
-            });
-            const sNum = sel._sessionNum;
-            const sDate = sel._sessionDate;
-            if (!sNum || !sDate) {
-              console.error("[Bridge] Missing session identity", { sNum, sDate });
-              alert(`Cannot label session: identifiers missing (ID: ${sNum}, Date: ${sDate}). Try refreshing the dashboard.`);
-              return;
-            }
-            const logPayload = JSON.stringify({
-              sessionNum: String(sNum),
-              date: String(sDate),
-              predSummary,
-              prefill
-            });
-            console.log("[Bridge] Launching openRetroactiveSurvey: " + logPayload);
-            try {
-              if (window.Android && window.Android.openRetroactiveSurvey) {
-                window.Android.openRetroactiveSurvey(
-                  String(sNum),
-                  String(sDate),
-                  String(predSummary),
-                  String(prefill)
-                );
-                console.log("[Bridge] Call to native openRetroactiveSurvey succeeded.");
-              } else {
-                console.warn("[Bridge] window.Android.openRetroactiveSurvey not found");
-                alert("Native bridge (window.Android) is not available. This feature only works inside the app.");
-              }
-            } catch (err) {
-              console.error("[Bridge] Native call failed", err);
-              alert("System error launching survey: " + err.message);
-            }
-          },
-          style: {
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 5,
-            fontSize: 11,
-            fontWeight: 800,
-            fontFamily: "'Space Grotesk', sans-serif",
-            color: D.purple,
-            background: "rgba(107,63,160,0.10)",
-            border: "1.5px solid rgba(107,63,160,0.18)",
-            borderRadius: 10,
-            padding: "6px 12px",
-            cursor: "pointer",
-            letterSpacing: "0.02em"
-          }
-        },
-        "\u270E Label this session"
-      ), (sel._sessionNum == null || !sel._sessionDate) && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: D.muted, opacity: 0.6 } }, "No survey data")));
+      const sel = timeline[selectedTimelineIdx];
+      const hasCoreSurveyMetric = maybeNum(sel.postSessionRating) > 0 || maybeNum(sel.regretScore) > 0 || maybeNum(sel.moodAfter) > 0 || maybeNum(sel.comparativeRating) > 0;
+      const hasSurvey = sel.hasSurvey === true && hasCoreSurveyMetric;
+      return /* @__PURE__ */ React.createElement("div", { style: { marginTop: 10 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: D.muted } }, (sel.startTime || "--:--").slice(0, 5), " \xB7 ", isFiniteNumber(maybeNum(sel.durationMin)) ? `${Math.round(sel.durationMin)} min` : "duration unavailable", " \xB7 ", isFiniteNumber(maybeNum(sel.reelCount)) ? `${Math.round(sel.reelCount)} reels` : "reel count unavailable"), hasSurvey && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 } }, maybeNum(sel.postSessionRating) > 0 && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 8, background: "#EEE9F5", color: "#6B3FA0" } }, "Rating ", sel.postSessionRating, "/5"), maybeNum(sel.regretScore) > 0 && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 8, background: sel.regretScore >= 4 ? "#F5EDE9" : "#EAF3EE", color: sel.regretScore >= 4 ? "#C4563A" : "#2A7A54" } }, "Regret ", sel.regretScore, "/5"), maybeNum(sel.moodAfter) > 0 && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 8, background: "#EEE9F5", color: "#6B3FA0" } }, "Mood ", sel.moodAfter, "/5"), maybeNum(sel.comparativeRating) > 0 && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 8, background: "#F5F0E2", color: "#9A7020" } }, "Experience ", sel.comparativeRating, "/5"), sel.intendedAction && sel.intendedAction !== "0" && sel.intendedAction !== "0.0" && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 8, background: "#F5F0E2", color: "#9A7020" } }, "Intent: ", sel.intendedAction)), !hasSurvey && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 6 } }, sel.isDoom !== void 0 && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: D.muted, opacity: 0.7, marginBottom: 5 } }, "Reelio said: ", /* @__PURE__ */ React.createElement("strong", { style: { color: sel.isDoom ? D.danger : D.safe } }, sel.isDoom ? "Autopilot" : "Mindful"), sel.modelConf < 0.7 && /* @__PURE__ */ React.createElement("span", { style: { marginLeft: 6, fontSize: 9, background: `${D.warn}15`, color: D.warn, padding: "1px 5px", borderRadius: 4, fontWeight: 800 } }, "HEURISTIC BLEND (", (sel.modelConf * 100).toFixed(0), "% CONF)")), sel.modelConf < 0.7 && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 6, fontSize: 10, color: D.muted, lineHeight: 1.4, padding: "8px 10px", background: `${D.warn}05`, borderRadius: 10, border: `1px solid ${D.warn}15` } }, /* @__PURE__ */ React.createElement("div", { style: { color: D.warn, fontWeight: 900, marginBottom: 2 } }, "\u26A0\uFE0F Behavioral Calibration Active"), "Current model confidence is low (", (sel.modelConf * 100).toFixed(0), "%). Reelio is blending HMM state inference with heuristic scoring (", Math.round(sel.heuristicScore * 100), "%) to ensure capture events are not missed during learning."), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: D.muted, opacity: 0.6, marginTop: 8 } }, "No survey data")));
     })())), /* @__PURE__ */ React.createElement(MoodDissonanceCard, { data }));
   }
   function DashboardWeek({ data }) {
@@ -1623,7 +1548,8 @@
     const weeklyTrendData = heat.slice(-7).map((d, i) => ({
       day: d.dayLabel || ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"][i],
       dateLabel: d.dateLabel || d.date || "",
-      score: Math.round(safeNum(d.avgCapture, 0) * 100),
+      score: Math.round(safeNum(d.doomRate, 0) * 100),
+      sessions: maybeNum(d.sessionCount),
       index: i
     }));
     return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 12 } }, weeklyTrendData.length > 0 && /* @__PURE__ */ React.createElement("div", { className: "card fade-card", style: {
@@ -1643,10 +1569,13 @@
       Tooltip,
       {
         contentStyle: { background: D.cardLight, border: `1px solid ${D.borderSoft}`, borderRadius: 10, fontSize: 12, color: D.ink, boxShadow: "0 4px 16px rgba(0,0,0,0.08)" },
-        formatter: (v) => [`${v}%`, "Autopilot"],
+        formatter: (v, name, props) => {
+          const sessions = props.payload.sessions;
+          return [`${v}% rate - ${isFiniteNumber(sessions) ? sessions + " session" + (sessions !== 1 ? "s" : "") : "N/A"}`, "Frequency"];
+        },
         labelStyle: { color: D.muted, fontWeight: 700 }
       }
-    ), /* @__PURE__ */ React.createElement(Line, { type: "monotone", dataKey: "score", stroke: D.purple, strokeWidth: 2.5, dot: { fill: D.purple, r: 4, stroke: D.cardLight, strokeWidth: 2 }, activeDot: { r: 6, fill: D.purple, stroke: D.cardLight, strokeWidth: 2 } })))), /* @__PURE__ */ React.createElement("div", { style: { marginTop: 8, padding: "10px 12px", background: "rgba(107,63,160,0.06)", borderRadius: 12, display: "flex", justifyContent: "space-between", alignItems: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: D.ink2, fontWeight: 600 } }, "Avg this week"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 16, fontWeight: 900, color: D.purple, fontFamily: "Nunito" } }, Math.round(weeklyTrendData.reduce((sum, d) => sum + d.score, 0) / weeklyTrendData.length), "%"))), /* @__PURE__ */ React.createElement("div", { className: "card fade-card", style: { ...fadeDelayStyle(0), padding: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 } }, /* @__PURE__ */ React.createElement(Label, { style: { color: D.ink } }, "Weekly Heatmap"), heat.length ? /* @__PURE__ */ React.createElement(
+    ), /* @__PURE__ */ React.createElement(Line, { type: "monotone", dataKey: "score", stroke: D.purple, strokeWidth: 2.5, dot: { fill: D.purple, r: 4, stroke: D.cardLight, strokeWidth: 2 }, activeDot: { r: 6, fill: D.purple, stroke: D.cardLight, strokeWidth: 2 } })))), /* @__PURE__ */ React.createElement("div", { style: { marginTop: 8, padding: "10px 12px", background: "rgba(107,63,160,0.06)", borderRadius: 12, display: "flex", justifyContent: "space-between", alignItems: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: D.ink2, fontWeight: 600 } }, "Avg this week (Mon-Present)"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 16, fontWeight: 900, color: D.purple, fontFamily: "Nunito" } }, isFiniteNumber(thisWeekRate) ? `${Math.round(thisWeekRate * 100)}%` : "--"))), /* @__PURE__ */ React.createElement("div", { className: "card fade-card", style: { ...fadeDelayStyle(0), padding: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 } }, /* @__PURE__ */ React.createElement(Label, { style: { color: D.ink } }, "Weekly Heatmap"), heat.length ? /* @__PURE__ */ React.createElement(
       StatusPill,
       {
         label: isFiniteNumber(underAvgDays) ? `${underAvgDays} days under your average` : "Weekly baseline unavailable",
@@ -1655,13 +1584,15 @@
     ) : null), !heat.length ? /* @__PURE__ */ React.createElement(EmptyState, { message: "Not enough weekly data yet" }) : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { height: 180 } }, /* @__PURE__ */ React.createElement(ResponsiveContainer, { width: "100%", height: "100%" }, (() => {
       const dayNames = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
       const heatData = heat.map((d, i) => {
-        const rawVal = safeNum(d.avgCapture, 0) * 100;
+        const rateVal = safeNum(d.doomRate, 0) * 100;
+        const intensityVal = safeNum(d.avgCapture, 0) * 100;
         return {
           day: d.dayLabel || dayNames[i % 7],
           dateLabel: d.dateLabel || d.date || "",
-          value: Math.round(rawVal),
+          value: Math.round(rateVal),
+          intensity: Math.round(intensityVal),
           sessions: maybeNum(d.sessionCount),
-          raw: rawVal
+          raw: rateVal
         };
       });
       const avgVal = heatData.length > 0 ? Math.round(heatData.reduce((sum, d) => sum + d.value, 0) / heatData.length) : 0;
@@ -1683,12 +1614,16 @@
           contentStyle: { background: D.cardLight, border: `1px solid ${D.borderSoft}`, borderRadius: 10, fontSize: 12, color: D.ink, boxShadow: "0 4px 16px rgba(0,0,0,0.08)" },
           formatter: (v, name, props) => {
             const sessions = props.payload.sessions;
-            return [`${v}% autopilot - ${isFiniteNumber(sessions) ? sessions + " session" + (sessions !== 1 ? "s" : "") : "N/A"}`, "Risk"];
+            const intensity = props.payload.intensity;
+            return [
+              `${v}% rate (${intensity}% intensity) - ${isFiniteNumber(sessions) ? sessions + " session" + (sessions !== 1 ? "s" : "") : "N/A"}`,
+              "Frequency"
+            ];
           },
           labelStyle: { color: D.muted, fontWeight: 700 },
           labelFormatter: (label, payload) => {
             const first = safeArr(payload)[0]?.payload;
-            return first?.dateLabel ? `${label} · ${first.dateLabel}` : label;
+            return first?.dateLabel ? `${label} \xB7 ${first.dateLabel}` : label;
           }
         }
       ), /* @__PURE__ */ React.createElement(
@@ -1716,7 +1651,7 @@
           )
         }
       ));
-    })())), selectedDay && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 12, padding: "8px 10px", background: "rgba(107,63,160,0.08)", borderLeft: `3px solid ${D.info}`, color: D.muted, fontSize: 12, borderRadius: 4 } }, /* @__PURE__ */ React.createElement("strong", null, selectedDay.day, selectedDay.dateLabel ? ` · ${selectedDay.dateLabel}` : "", ":"), " ", Math.round(selectedDay.raw), "% autopilot \xB7 ", isFiniteNumber(maybeNum(selectedDay.sessions)) ? selectedDay.sessions + " session" + (selectedDay.sessions !== 1 ? "s" : "") : "N/A"))), /* @__PURE__ */ React.createElement("div", { className: "card fade-card", style: { ...fadeDelayStyle(1), padding: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 8 } }, /* @__PURE__ */ React.createElement(Label, { style: { color: D.ink } }, "Weekly Insight")), !heat.length ? /* @__PURE__ */ React.createElement(EmptyState, { message: "Need more sessions to compare this week vs last week" }) : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: D.text, marginBottom: 10 } }, confidenceText), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: D.muted } }, "This week: ", isFiniteNumber(thisWeekRate) ? `${Math.round(thisWeekRate * 100)}%` : "--", " autopilot  |  Last week: ", isFiniteNumber(lastWeekRate) ? `${Math.round(lastWeekRate * 100)}%` : "--", "  |  ", isFiniteNumber(delta) ? delta < 0 ? "\u2193 better" : delta > 0 ? "\u2191 worse" : "stable" : "comparison unavailable"))));
+    })())), selectedDay && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 12, padding: "8px 10px", background: "rgba(107,63,160,0.08)", borderLeft: `3px solid ${D.info}`, color: D.muted, fontSize: 12, borderRadius: 4 } }, /* @__PURE__ */ React.createElement("strong", null, selectedDay.day, selectedDay.dateLabel ? ` \xB7 ${selectedDay.dateLabel}` : "", ":"), " ", Math.round(selectedDay.raw), "% autopilot \xB7 ", isFiniteNumber(maybeNum(selectedDay.sessions)) ? selectedDay.sessions + " session" + (selectedDay.sessions !== 1 ? "s" : "") : "N/A"))), /* @__PURE__ */ React.createElement("div", { className: "card fade-card", style: { ...fadeDelayStyle(1), padding: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 8 } }, /* @__PURE__ */ React.createElement(Label, { style: { color: D.ink } }, "Weekly Insight")), !heat.length ? /* @__PURE__ */ React.createElement(EmptyState, { message: "Need more sessions to compare this week vs last week" }) : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: D.text, marginBottom: 10 } }, confidenceText), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: D.muted } }, "This week: ", isFiniteNumber(thisWeekRate) ? `${Math.round(thisWeekRate * 100)}%` : "--", " autopilot  |  Last week: ", isFiniteNumber(lastWeekRate) ? `${Math.round(lastWeekRate * 100)}%` : "--", "  |  ", isFiniteNumber(delta) ? delta < 0 ? "\u2193 better" : delta > 0 ? "\u2191 worse" : "stable" : "comparison unavailable"))));
   }
   function DashboardAllTime({ data }) {
     const topology = data.sessionTopology || {};
@@ -1837,7 +1772,7 @@
                             0%, 100% { opacity: 0.55; }
                             50% { opacity: 1; }
                         }
-`), /* @__PURE__ */ React.createElement("svg", { width: "100%", viewBox: "0 0 320 160" }, /* @__PURE__ */ React.createElement("defs", null, /* @__PURE__ */ React.createElement("filter", { id: "laneGlow", x: "-50%", y: "-50%", width: "200%", height: "200%" }, /* @__PURE__ */ React.createElement("feGaussianBlur", { stdDeviation: "3.2", result: "blur" }), /* @__PURE__ */ React.createElement("feMerge", null, /* @__PURE__ */ React.createElement("feMergeNode", { in: "blur" }), /* @__PURE__ */ React.createElement("feMergeNode", { in: "SourceGraphic" })))), /* @__PURE__ */ React.createElement("path", { d: "M 56 36 C 34 14 106 14 84 36", fill: "none", stroke: D.safe, strokeOpacity: laneOpacity(c2cProb, 0.18, 0.45), strokeWidth: laneWidth(c2cProb, 1.3, 2.6), strokeDasharray: "4 3" }), /* @__PURE__ */ React.createElement("polygon", { points: "84,36 80,30 87,31", fill: D.safe }), /* @__PURE__ */ React.createElement("text", { x: "70", y: "8", textAnchor: "middle", fontFamily: "Space Mono", fontSize: "10", fontWeight: "700", fill: D.safe }, c2cPct), /* @__PURE__ */ React.createElement("text", { x: "70", y: "20", textAnchor: "middle", fontFamily: "Nunito", fontSize: "9", fontWeight: "800", fill: D.safe, opacity: "0.75" }, "stay mindful"), /* @__PURE__ */ React.createElement("circle", { r: 2.1 + c2cProb * 1.1, fill: D.safe, style: { offsetPath: "path('M 56 36 C 34 14 106 14 84 36')", animation: `loopTravel ${flowDuration(c2cProb, 4.8, 2.8)} linear 0.2s infinite` } }), /* @__PURE__ */ React.createElement("path", { d: "M 236 36 C 214 14 286 14 264 36", fill: "none", stroke: D.danger, strokeOpacity: laneOpacity(d2dProb, 0.18, 0.45), strokeWidth: laneWidth(d2dProb, 1.3, 2.6), strokeDasharray: "4 3" }), /* @__PURE__ */ React.createElement("polygon", { points: "264,36 260,30 267,31", fill: D.danger }), /* @__PURE__ */ React.createElement("text", { x: "250", y: "8", textAnchor: "middle", fontFamily: "Space Mono", fontSize: "10", fontWeight: "700", fill: D.danger }, d2dPct), /* @__PURE__ */ React.createElement("text", { x: "250", y: "20", textAnchor: "middle", fontFamily: "Nunito", fontSize: "9", fontWeight: "800", fill: D.danger, opacity: "0.75" }, "stay autopilot"), /* @__PURE__ */ React.createElement("circle", { r: 2.1 + d2dProb * 1.1, fill: D.danger, style: { offsetPath: "path('M 236 36 C 214 14 286 14 264 36')", animation: `loopTravel ${flowDuration(d2dProb, 4.9, 2.7)} linear 0.8s infinite` } }), /* @__PURE__ */ React.createElement("g", { style: { animation: "pulseNode 3s ease-in-out infinite" } }, /* @__PURE__ */ React.createElement("circle", { cx: "70", cy: "88", r: "43", fill: `rgba(58,158,111,${nodeHalo(c2cProb)})` }), /* @__PURE__ */ React.createElement("circle", { cx: "70", cy: "88", r: "38", fill: "rgba(58,158,111,0.10)", stroke: D.safe, strokeWidth: "2.2" }), /* @__PURE__ */ React.createElement("text", { x: "70", y: "83", textAnchor: "middle", fontFamily: "Space Grotesk", fontSize: "11", fontWeight: "800", fill: D.safe }, "Mindful"), /* @__PURE__ */ React.createElement("text", { x: "70", y: "97", textAnchor: "middle", fontFamily: "Space Grotesk", fontSize: "11", fontWeight: "800", fill: D.safe }, "Browsing")), /* @__PURE__ */ React.createElement("g", { style: { animation: "pulseNode 3s ease-in-out 1.5s infinite" } }, /* @__PURE__ */ React.createElement("circle", { cx: "250", cy: "88", r: "43", fill: `rgba(196,86,58,${nodeHalo(d2dProb)})` }), /* @__PURE__ */ React.createElement("circle", { cx: "250", cy: "88", r: "38", fill: "rgba(196,86,58,0.10)", stroke: D.danger, strokeWidth: "2.2" }), /* @__PURE__ */ React.createElement("text", { x: "250", y: "91", textAnchor: "middle", fontFamily: "Space Grotesk", fontSize: "11", fontWeight: "800", fill: D.danger }, "Autopilot")), /* @__PURE__ */ React.createElement("path", { d: "M 110 70 Q 160 41 210 70", fill: "none", stroke: D.danger, strokeOpacity: laneOpacity(c2dProb, 0.16, 0.28), strokeWidth: laneWidth(c2dProb, 5.5, 10), filter: "url(#laneGlow)", style: { animation: "pulseLane 2.6s ease-in-out infinite" } }), /* @__PURE__ */ React.createElement("path", { id: "pathForward", d: "M 110 70 Q 160 41 210 70", fill: "none", stroke: D.danger, strokeOpacity: laneOpacity(c2dProb, 0.45, 1), strokeWidth: laneWidth(c2dProb, 2.4, 5.6), strokeLinecap: "round" }), /* @__PURE__ */ React.createElement("polygon", { points: "210,70 201,64 204,74", fill: D.danger }), /* @__PURE__ */ React.createElement("text", { x: "160", y: "36", textAnchor: "middle", fontFamily: "Space Mono", fontSize: "11", fontWeight: "800", fill: D.danger }, c2dPct), /* @__PURE__ */ React.createElement("text", { x: "160", y: "24", textAnchor: "middle", fontFamily: "Nunito", fontSize: "9", fontWeight: "800", fill: D.danger, opacity: "0.78" }, "slip into autopilot"), /* @__PURE__ */ React.createElement("circle", { r: 3.2 + c2dProb * 1.8, fill: D.danger, style: { offsetPath: "path('M 110 70 Q 160 41 210 70')", animation: `flowTravel ${flowDuration(c2dProb, 4.6, 2.2)} linear infinite` } }), /* @__PURE__ */ React.createElement("path", { d: "M 210 106 Q 160 135 110 106", fill: "none", stroke: D.safe, strokeOpacity: laneOpacity(d2cProb, 0.16, 0.28), strokeWidth: laneWidth(d2cProb, 5, 9), filter: "url(#laneGlow)", style: { animation: "pulseLane 2.9s ease-in-out 0.5s infinite" } }), /* @__PURE__ */ React.createElement("path", { id: "pathBack", d: "M 210 106 Q 160 135 110 106", fill: "none", stroke: D.safe, strokeOpacity: laneOpacity(d2cProb, 0.45, 1), strokeWidth: laneWidth(d2cProb, 2.2, 5.2), strokeLinecap: "round", strokeDasharray: "5 3" }), /* @__PURE__ */ React.createElement("polygon", { points: "110,106 119,100 117,111", fill: D.safe }), /* @__PURE__ */ React.createElement("text", { x: "160", y: "148", textAnchor: "middle", fontFamily: "Space Mono", fontSize: "11", fontWeight: "800", fill: D.safe }, d2cPct), /* @__PURE__ */ React.createElement("text", { x: "160", y: "136", textAnchor: "middle", fontFamily: "Nunito", fontSize: "9", fontWeight: "800", fill: D.safe, opacity: "0.78" }, "recover to mindful"), /* @__PURE__ */ React.createElement("circle", { r: 3.2 + d2cProb * 1.8, fill: D.safe, style: { offsetPath: "path('M 210 106 Q 160 135 110 106')", animation: `flowTravel ${flowDuration(d2cProb, 4.6, 2.2)} linear 0.6s infinite` } })), /* @__PURE__ */ React.createElement("div", { style: { marginTop: 10, fontSize: 11, color: D.muted, lineHeight: 1.45 } }, "Dot speed reflects how often the switch happens. Lane thickness shows how strong that transition is."));
+                    `), /* @__PURE__ */ React.createElement("svg", { width: "100%", viewBox: "0 0 320 160" }, /* @__PURE__ */ React.createElement("defs", null, /* @__PURE__ */ React.createElement("filter", { id: "laneGlow", x: "-50%", y: "-50%", width: "200%", height: "200%" }, /* @__PURE__ */ React.createElement("feGaussianBlur", { stdDeviation: "3.2", result: "blur" }), /* @__PURE__ */ React.createElement("feMerge", null, /* @__PURE__ */ React.createElement("feMergeNode", { in: "blur" }), /* @__PURE__ */ React.createElement("feMergeNode", { in: "SourceGraphic" })))), /* @__PURE__ */ React.createElement("path", { d: "M 56 36 C 34 14 106 14 84 36", fill: "none", stroke: D.safe, strokeOpacity: laneOpacity(c2cProb, 0.18, 0.45), strokeWidth: laneWidth(c2cProb, 1.3, 2.6), strokeDasharray: "4 3" }), /* @__PURE__ */ React.createElement("polygon", { points: "84,36 80,30 87,31", fill: D.safe }), /* @__PURE__ */ React.createElement("text", { x: "70", y: "8", textAnchor: "middle", fontFamily: "Space Mono", fontSize: "10", fontWeight: "700", fill: D.safe }, c2cPct), /* @__PURE__ */ React.createElement("text", { x: "70", y: "20", textAnchor: "middle", fontFamily: "Nunito", fontSize: "9", fontWeight: "800", fill: D.safe, opacity: "0.75" }, "stay mindful"), /* @__PURE__ */ React.createElement("circle", { r: 2.1 + c2cProb * 1.1, fill: D.safe, style: { offsetPath: "path('M 56 36 C 34 14 106 14 84 36')", animation: `loopTravel ${flowDuration(c2cProb, 4.8, 2.8)} linear 0.2s infinite` } }), /* @__PURE__ */ React.createElement("path", { d: "M 236 36 C 214 14 286 14 264 36", fill: "none", stroke: D.danger, strokeOpacity: laneOpacity(d2dProb, 0.18, 0.45), strokeWidth: laneWidth(d2dProb, 1.3, 2.6), strokeDasharray: "4 3" }), /* @__PURE__ */ React.createElement("polygon", { points: "264,36 260,30 267,31", fill: D.danger }), /* @__PURE__ */ React.createElement("text", { x: "250", y: "8", textAnchor: "middle", fontFamily: "Space Mono", fontSize: "10", fontWeight: "700", fill: D.danger }, d2dPct), /* @__PURE__ */ React.createElement("text", { x: "250", y: "20", textAnchor: "middle", fontFamily: "Nunito", fontSize: "9", fontWeight: "800", fill: D.danger, opacity: "0.75" }, "stay autopilot"), /* @__PURE__ */ React.createElement("circle", { r: 2.1 + d2dProb * 1.1, fill: D.danger, style: { offsetPath: "path('M 236 36 C 214 14 286 14 264 36')", animation: `loopTravel ${flowDuration(d2dProb, 4.9, 2.7)} linear 0.8s infinite` } }), /* @__PURE__ */ React.createElement("g", { style: { animation: "pulseNode 3s ease-in-out infinite" } }, /* @__PURE__ */ React.createElement("circle", { cx: "70", cy: "88", r: "43", fill: `rgba(58,158,111,${nodeHalo(c2cProb)})` }), /* @__PURE__ */ React.createElement("circle", { cx: "70", cy: "88", r: "38", fill: "rgba(58,158,111,0.10)", stroke: D.safe, strokeWidth: "2.2" }), /* @__PURE__ */ React.createElement("text", { x: "70", y: "83", textAnchor: "middle", fontFamily: "Space Grotesk", fontSize: "11", fontWeight: "800", fill: D.safe }, "Mindful"), /* @__PURE__ */ React.createElement("text", { x: "70", y: "97", textAnchor: "middle", fontFamily: "Space Grotesk", fontSize: "11", fontWeight: "800", fill: D.safe }, "Browsing")), /* @__PURE__ */ React.createElement("g", { style: { animation: "pulseNode 3s ease-in-out 1.5s infinite" } }, /* @__PURE__ */ React.createElement("circle", { cx: "250", cy: "88", r: "43", fill: `rgba(196,86,58,${nodeHalo(d2dProb)})` }), /* @__PURE__ */ React.createElement("circle", { cx: "250", cy: "88", r: "38", fill: "rgba(196,86,58,0.10)", stroke: D.danger, strokeWidth: "2.2" }), /* @__PURE__ */ React.createElement("text", { x: "250", y: "91", textAnchor: "middle", fontFamily: "Space Grotesk", fontSize: "11", fontWeight: "800", fill: D.danger }, "Autopilot")), /* @__PURE__ */ React.createElement("path", { d: "M 110 70 Q 160 41 210 70", fill: "none", stroke: D.danger, strokeOpacity: laneOpacity(c2dProb, 0.16, 0.28), strokeWidth: laneWidth(c2dProb, 5.5, 10), filter: "url(#laneGlow)", style: { animation: "pulseLane 2.6s ease-in-out infinite" } }), /* @__PURE__ */ React.createElement("path", { id: "pathForward", d: "M 110 70 Q 160 41 210 70", fill: "none", stroke: D.danger, strokeOpacity: laneOpacity(c2dProb, 0.45, 1), strokeWidth: laneWidth(c2dProb, 2.4, 5.6), strokeLinecap: "round" }), /* @__PURE__ */ React.createElement("polygon", { points: "210,70 201,64 204,74", fill: D.danger }), /* @__PURE__ */ React.createElement("text", { x: "160", y: "36", textAnchor: "middle", fontFamily: "Space Mono", fontSize: "11", fontWeight: "800", fill: D.danger }, c2dPct), /* @__PURE__ */ React.createElement("text", { x: "160", y: "24", textAnchor: "middle", fontFamily: "Nunito", fontSize: "9", fontWeight: "800", fill: D.danger, opacity: "0.78" }, "slip into autopilot"), /* @__PURE__ */ React.createElement("circle", { r: 3.2 + c2dProb * 1.8, fill: D.danger, style: { offsetPath: "path('M 110 70 Q 160 41 210 70')", animation: `flowTravel ${flowDuration(c2dProb, 4.6, 2.2)} linear infinite` } }), /* @__PURE__ */ React.createElement("path", { d: "M 210 106 Q 160 135 110 106", fill: "none", stroke: D.safe, strokeOpacity: laneOpacity(d2cProb, 0.16, 0.28), strokeWidth: laneWidth(d2cProb, 5, 9), filter: "url(#laneGlow)", style: { animation: "pulseLane 2.9s ease-in-out 0.5s infinite" } }), /* @__PURE__ */ React.createElement("path", { id: "pathBack", d: "M 210 106 Q 160 135 110 106", fill: "none", stroke: D.safe, strokeOpacity: laneOpacity(d2cProb, 0.45, 1), strokeWidth: laneWidth(d2cProb, 2.2, 5.2), strokeLinecap: "round", strokeDasharray: "5 3" }), /* @__PURE__ */ React.createElement("polygon", { points: "110,106 119,100 117,111", fill: D.safe }), /* @__PURE__ */ React.createElement("text", { x: "160", y: "148", textAnchor: "middle", fontFamily: "Space Mono", fontSize: "11", fontWeight: "800", fill: D.safe }, d2cPct), /* @__PURE__ */ React.createElement("text", { x: "160", y: "136", textAnchor: "middle", fontFamily: "Nunito", fontSize: "9", fontWeight: "800", fill: D.safe, opacity: "0.78" }, "recover to mindful"), /* @__PURE__ */ React.createElement("circle", { r: 3.2 + d2cProb * 1.8, fill: D.safe, style: { offsetPath: "path('M 210 106 Q 160 135 110 106')", animation: `flowTravel ${flowDuration(d2cProb, 4.6, 2.2)} linear 0.6s infinite` } })), /* @__PURE__ */ React.createElement("div", { style: { marginTop: 10, fontSize: 11, color: D.muted, lineHeight: 1.45 } }, "Dot speed reflects how often the switch happens. Lane thickness shows how strong that transition is."));
     })(), /* @__PURE__ */ React.createElement("div", { style: { marginTop: 12, color: D.muted, fontSize: 13, lineHeight: 1.5 } }, isFiniteNumber(recoveryWindow) ? `Once you enter autopilot mode, you typically recover within ${recoveryWindow.toFixed(1)} sessions.${isFiniteNumber(recoveryDelta) ? ` That is ${recoveryDelta <= 0 ? "better" : "worse"} than last month.` : ""}` : "Not enough transition data yet to estimate recovery window."), /* @__PURE__ */ React.createElement("div", { style: { marginTop: 10 } }, confMeta.show ? /* @__PURE__ */ React.createElement("div", { style: { color: D.info, fontSize: 12 } }, "Prediction Accuracy: ", Math.round(conf * 100), "%") : confMeta.known ? /* @__PURE__ */ React.createElement("div", { style: { color: D.muted, fontSize: 12 } }, "Still learning your patterns \xB7 ", confMeta.needed, " more sessions to full accuracy") : /* @__PURE__ */ React.createElement("div", { style: { color: D.muted, fontSize: 12 } }, "Prediction accuracy not available in this dataset."))), /* @__PURE__ */ React.createElement(CollapsibleSection, { title: `Session Topology (${totalReels} reels)`, defaultOpen: false }, safeArr(topology.reelData).length === 0 ? /* @__PURE__ */ React.createElement(EmptyState, { message: "Not enough data for session topology" }) : /* @__PURE__ */ React.createElement(React.Fragment, null, (() => {
       const [topoSmooth, setTopoSmooth] = useState(0);
       const rawReelData = safeArr(topology.reelData).map((r) => ({
@@ -1967,8 +1902,7 @@
       const source = entry?.raw || entry || {};
       return maybeNum(entry?.durationSec) ?? maybeNum(source.durationSec) ?? maybeNum(source.sessionDurationSec);
     }).filter((durationSec) => isFiniteNumber(durationSec) && durationSec >= 20).slice(-30).sort((a, b) => a - b);
-    if (!recentDurations.length)
-      return 180;
+    if (!recentDurations.length) return 180;
     const mid = Math.floor(recentDurations.length / 2);
     const median = recentDurations.length % 2 ? recentDurations[mid] : (recentDurations[mid - 1] + recentDurations[mid]) / 2;
     return Math.min(300, Math.max(90, median));
@@ -1976,16 +1910,8 @@
   const getDayCaptureWeight = (entry, personalBaselineSec = 180) => {
     const source = entry?.raw || entry || {};
     const durationSec = maybeNum(entry?.durationSec) ?? maybeNum(source.durationSec) ?? maybeNum(source.sessionDurationSec);
-    if (!isFiniteNumber(durationSec) || durationSec <= 0)
-      return 0.2;
-    const baseWeight = Math.min(durationSec / personalBaselineSec, 1);
-    if (durationSec < 30)
-      return Math.max(0.06, baseWeight * 0.2);
-    if (durationSec < 60)
-      return Math.max(0.12, baseWeight * 0.45);
-    if (durationSec < 120)
-      return Math.max(0.3, baseWeight * 0.75);
-    return Math.max(0.45, baseWeight);
+    if (!isFiniteNumber(durationSec) || durationSec <= 0) return 0.2;
+    return Math.max(0.1, Math.min(durationSec / personalBaselineSec, 1));
   };
   const getDaySessionDisplayProbability = (session, personalBaselineSec = 180) => {
     const rawProbability = maybeNum(session?.S_t) ?? maybeNum(session?.captureProb);
@@ -2027,8 +1953,7 @@
     });
     const weighted = sessions.map((e) => {
       const prob = getDaySessionDisplayProbability(e.raw, personalCaptureBaselineSec);
-      if (!isFiniteNumber(prob))
-        return null;
+      if (!isFiniteNumber(prob)) return null;
       const weight = getDayCaptureWeight(e, personalCaptureBaselineSec);
       return weight > 0 ? { prob, weight } : null;
     }).filter(Boolean);
@@ -2103,9 +2028,7 @@
       const moodAfter = maybeNum(s.moodAfter);
       const comparativeRating = maybeNum(s.comparativeRating);
       const intendedAction = typeof s.intendedAction === "string" ? s.intendedAction : "";
-      const retroactiveLabel = Boolean(s.retroactiveLabel);
-      const delayedRegretScore = maybeNum(s.delayedRegretScore);
-      const hasSurvey = isFiniteNumber(postSessionRating) && postSessionRating > 0 || isFiniteNumber(regretScore) && regretScore > 0 || isFiniteNumber(moodAfter) && moodAfter > 0 || isFiniteNumber(comparativeRating) && comparativeRating > 0 || isFiniteNumber(delayedRegretScore) && delayedRegretScore > 0;
+      const hasSurvey = isFiniteNumber(postSessionRating) && postSessionRating > 0 || isFiniteNumber(regretScore) && regretScore > 0 || isFiniteNumber(moodAfter) && moodAfter > 0 || isFiniteNumber(comparativeRating) && comparativeRating > 0;
       let startLabel = "--";
       if (typeof s.startTime === "string" && s.startTime && s.startTime !== "Unknown") {
         const dt = new Date(s.startTime);
@@ -2157,7 +2080,7 @@
         color: "#3A9E6F",
         textTransform: "uppercase",
         letterSpacing: "0.02em"
-      } }, retroactiveLabel ? "Retroactively Labeled" : "Surveyed"), isFiniteNumber(postSessionRating) && postSessionRating > 0 && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 8, background: "#EEE9F5", color: "#6B3FA0" } }, "Rating ", postSessionRating, "/5"), isFiniteNumber(regretScore) && regretScore > 0 && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 8, background: regretScore >= 4 ? "#F5EDE9" : "#EAF3EE", color: regretScore >= 4 ? "#C4563A" : "#2A7A54" } }, "Regret ", regretScore, "/5"), isFiniteNumber(moodAfter) && moodAfter > 0 && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 8, background: "#EEE9F5", color: "#6B3FA0" } }, "Mood ", moodAfter, "/5"), isFiniteNumber(comparativeRating) && comparativeRating > 0 && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 8, background: "#F5F0E2", color: "#9A7020" } }, "Experience ", comparativeRating, "/5"), intendedAction && intendedAction !== "0" && intendedAction !== "0.0" && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 8, background: "#F5F0E2", color: "#9A7020" } }, "Intent: ", intendedAction))), isFiniteNumber(prob) && /* @__PURE__ */ React.createElement("div", { style: {
+      } }, "Surveyed"), isFiniteNumber(postSessionRating) && postSessionRating > 0 && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 8, background: "#EEE9F5", color: "#6B3FA0" } }, "Rating ", postSessionRating, "/5"), isFiniteNumber(regretScore) && regretScore > 0 && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 8, background: regretScore >= 4 ? "#F5EDE9" : "#EAF3EE", color: regretScore >= 4 ? "#C4563A" : "#2A7A54" } }, "Regret ", regretScore, "/5"), isFiniteNumber(moodAfter) && moodAfter > 0 && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 8, background: "#EEE9F5", color: "#6B3FA0" } }, "Mood ", moodAfter, "/5"), isFiniteNumber(comparativeRating) && comparativeRating > 0 && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 8, background: "#F5F0E2", color: "#9A7020" } }, "Experience ", comparativeRating, "/5"), intendedAction && intendedAction !== "0" && intendedAction !== "0.0" && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 8, background: "#F5F0E2", color: "#9A7020" } }, "Intent: ", intendedAction))), isFiniteNumber(prob) && /* @__PURE__ */ React.createElement("div", { style: {
         fontFamily: "'Space Grotesk', sans-serif",
         fontSize: 16,
         fontWeight: 800,
@@ -2184,6 +2107,7 @@
     heatmap.forEach((d) => {
       if (d.date) dayLookup[d.date] = d;
     });
+    const collectionStartDate = Object.keys(dateBuckets).length ? Object.keys(dateBuckets).sort()[0] : heatmap.map((d) => d?.date).filter(Boolean).sort()[0] || null;
     const year = viewMonth.year;
     const month = viewMonth.month;
     const firstDay = new Date(year, month, 1);
@@ -2298,8 +2222,10 @@
       if (!cell) return /* @__PURE__ */ React.createElement("div", { key: `empty-${idx}` });
       const today = /* @__PURE__ */ new Date();
       const isToday = cell.day === today.getDate() && month === today.getMonth() && year === today.getFullYear();
-      const isFuture = new Date(year, month, cell.day) > today;
-      const state = isFiniteNumber(cell.avgCapture) ? stateFromCapture(cell.avgCapture) : null;
+      const cellDate = new Date(year, month, cell.day);
+      const isFuture = cellDate > today;
+      const hasTrackedWindowStarted = !!collectionStartDate && cell.dateStr >= collectionStartDate;
+      const state = isFiniteNumber(cell.avgCapture) ? stateFromCapture(cell.avgCapture) : !isFuture && hasTrackedWindowStarted ? CAPTURE_STATES[3] : null;
       if (isFuture || !state) {
         return /* @__PURE__ */ React.createElement("div", { key: cell.dateStr, style: {
           aspectRatio: "1",
@@ -2472,7 +2398,7 @@
       }
     ));
   }
-  function SettingsScreen({ data }) {
+  function SettingsScreen({ data, onShowOnboarding }) {
     const [surveyProb, setSurveyProb] = useState(0.3);
     const [sleepStart, setSleepStart] = useState(23);
     const [sleepEnd, setSleepEnd] = useState(7);
@@ -2568,7 +2494,23 @@
       alignItems: "center",
       justifyContent: "center",
       gap: 8
-    } }, /* @__PURE__ */ React.createElement(Download, { size: 15 }), " Export My Data"), /* @__PURE__ */ React.createElement("button", { onClick: onReset, style: {
+    } }, /* @__PURE__ */ React.createElement(Download, { size: 15 }), " Export My Data"), /* @__PURE__ */ React.createElement("button", { onClick: onShowOnboarding, style: {
+      width: "100%",
+      padding: "14px",
+      borderRadius: 14,
+      cursor: "pointer",
+      fontFamily: "'Space Grotesk', sans-serif",
+      fontSize: 14,
+      fontWeight: 700,
+      letterSpacing: "0.02em",
+      background: "transparent",
+      color: D.ink,
+      border: `2px solid rgba(26,22,18,0.35)`,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 8
+    } }, "View Onboarding"), /* @__PURE__ */ React.createElement("button", { onClick: onReset, style: {
       width: "100%",
       padding: "14px",
       borderRadius: 14,
@@ -2858,7 +2800,7 @@
       zIndex: 2
     } });
   }
-  function OnboardingState() {
+  function OnboardingState({ onContinue }) {
     const checkA11y = () => typeof window.Android?.isAccessibilityEnabled === "function" ? !!window.Android.isAccessibilityEnabled() : false;
     const [isAccessibilityActive, setIsAccessibilityActive] = useState(checkA11y);
     useEffect(() => {
@@ -2879,13 +2821,15 @@
             @keyframes cardUp { from { opacity:0; transform: translateY(32px); } to { opacity:1; transform: translateY(0); } }
             @keyframes tagPop { from { opacity:0; transform: scale(0.85) translateY(6px); } to { opacity:1; transform: scale(1) translateY(0); } }
             @keyframes dotPulse { 0%,100% { opacity:0.4; transform: scale(1); } 50% { opacity:1; transform: scale(1.3); } }
-        `), /* @__PURE__ */ React.createElement("div", { style: {
+        `), /* @__PURE__ */ React.createElement("div", { onClick: onContinue, style: {
       minHeight: "100vh",
       background: "#EDE8DF",
       position: "relative",
       overflow: "hidden",
       display: "flex",
-      flexDirection: "column"
+      flexDirection: "column",
+      cursor: onContinue ? "pointer" : "default",
+      userSelect: "none"
     } }, /* @__PURE__ */ React.createElement(
       "svg",
       {
@@ -3036,7 +2980,17 @@
       fontSize: 12,
       color: "rgba(26,22,18,0.22)",
       lineHeight: 1.5
-    } }, "Open Instagram Reels \u2014 Reelio starts tracking automatically."))));
+    } }, "Open Instagram Reels \u2014 Reelio starts tracking automatically."), onContinue && /* @__PURE__ */ React.createElement("div", { style: {
+      marginTop: 18,
+      textAlign: "center",
+      animation: "tagPop 0.5s ease 1.2s both"
+    } }, /* @__PURE__ */ React.createElement("span", { style: {
+      fontFamily: "'Nunito', sans-serif",
+      fontSize: 13,
+      fontWeight: 700,
+      color: "rgba(26,22,18,0.32)",
+      letterSpacing: "0.04em"
+    } }, "tap anywhere to continue")))));
   }
   function getShortSessionEvidence(durationSec, reelCount, baselineSec = 180) {
     const hasDuration = isFiniteNumber(durationSec);
@@ -3093,7 +3047,7 @@
     });
     const deriveHeatmapLabels = (dateKey, fallbackLabel = "") => {
       if (typeof dateKey === "string" && /^\d{4}-\d{2}-\d{2}$/.test(dateKey)) {
-        const dt = new Date(`${dateKey}T12:00:00`);
+        const dt = /* @__PURE__ */ new Date(`${dateKey}T12:00:00`);
         if (!Number.isNaN(dt.getTime())) {
           return {
             dayLabel: dt.toLocaleDateString(void 0, { weekday: "short" }).toUpperCase(),
@@ -3130,9 +3084,6 @@
         probability,
         isDoom: isFiniteNumber(probability) ? probability >= DOOM_THRESHOLD : Boolean(source.isDoom),
         _ts: ts,
-        // Session identity — needed for retroactive labeling bridge call
-        _sessionNum: source.sessionNum ?? null,
-        _sessionDate: source.date ?? null,
         // Survey self-report labels
         postSessionRating: maybeNum(source.postSessionRating) ?? 0,
         regretScore: maybeNum(source.regretScore) ?? 0,
@@ -3141,22 +3092,23 @@
         intendedAction: source.intendedAction || "",
         actualVsIntended: maybeNum(source.actualVsIntended) ?? 0,
         comparativeRating: maybeNum(source.comparativeRating) ?? 0,
-        delayedRegretScore: maybeNum(source.delayedRegretScore) ?? 0,
         supervisedDoom: maybeNum(source.supervisedDoom) ?? 0,
         hasSurvey: Boolean(source.hasSurvey),
-        retroactiveLabel: Boolean(source.retroactiveLabel),
         // Heuristic and confidence metadata for Fix 1
         heuristicScore: maybeNum(source.heuristic_score) ?? 0,
         modelConf: maybeNum(source.model_conf) ?? 1
       };
     };
-    const providedTodaySource = safeArr(rawData?.todaySessions).filter((s) => s && typeof s === "object").map((s, idx) => ({ raw: s, idx, ts: pickSessionTimestampMs(s), durationSec: deriveSessionDurationSec(s) }));
+    const _now = /* @__PURE__ */ new Date();
+    const deviceTodayKey = `${_now.getFullYear()}-${String(_now.getMonth() + 1).padStart(2, "0")}-${String(_now.getDate()).padStart(2, "0")}`;
+    const providedTodaySource = safeArr(rawData?.todaySessions).filter((s) => s && typeof s === "object").map((s, idx) => {
+      const merged = mergeRetro(s);
+      return { raw: merged, idx, ts: pickSessionTimestampMs(merged), durationSec: deriveSessionDurationSec(merged) };
+    }).filter((entry) => normalizeDateKey(entry.raw) === deviceTodayKey);
     providedTodaySource.sort((a, b) => {
       if (isFiniteNumber(a.ts) && isFiniteNumber(b.ts)) return a.ts - b.ts;
       return a.idx - b.idx;
     });
-    const _now = /* @__PURE__ */ new Date();
-    const deviceTodayKey = `${_now.getFullYear()}-${String(_now.getMonth() + 1).padStart(2, "0")}-${String(_now.getDate()).padStart(2, "0")}`;
     const deviceTodaySessions = dateBuckets[deviceTodayKey] ? [...dateBuckets[deviceTodayKey]].sort((a, b) => {
       if (isFiniteNumber(a.ts) && isFiniteNumber(b.ts)) return a.ts - b.ts;
       return a.idx - b.idx;
@@ -3169,6 +3121,8 @@
       return row;
     });
     const todaySessions = todaySessionsDetailed.map(({ _ts, probability, ...rest }) => rest);
+    const todayReelCounts = todaySessionsDetailed.map((s) => s.reelCount).filter(isFiniteNumber);
+    const derivedTodayAvgReels = todayReelCounts.length ? averageOf(todayReelCounts) : null;
     const todayDurationSecs = todaySessionsDetailed.map((s) => isFiniteNumber(s.durationMin) ? s.durationMin * 60 : null).filter(isFiniteNumber);
     const derivedActiveTodaySeconds = todayDurationSecs.length ? sumOf(todayDurationSecs) : null;
     const dailyTotals = dateKeys.map((k) => {
@@ -3391,34 +3345,28 @@
       const explicitDurationSec = maybeNum(source.durationSec) ?? maybeNum(source.sessionDurationSec);
       const fallbackDurationSec = isFiniteNumber(entry?.durationSec) ? entry.durationSec : deriveSessionDurationSec(source);
       const durationSec = isFiniteNumber(explicitDurationSec) ? explicitDurationSec : fallbackDurationSec;
-      if (!isFiniteNumber(durationSec) || durationSec <= 0)
-        return 0.2;
-      const baseWeight = Math.min(durationSec / personalCaptureBaselineSec, 1);
-      if (durationSec < 30)
-        return Math.max(0.06, baseWeight * 0.2);
-      if (durationSec < 60)
-        return Math.max(0.12, baseWeight * 0.45);
-      if (durationSec < 120)
-        return Math.max(0.3, baseWeight * 0.75);
-      return Math.max(0.45, baseWeight);
+      if (!isFiniteNumber(durationSec) || durationSec <= 0) return 0.2;
+      return Math.max(0.1, Math.min(durationSec / personalCaptureBaselineSec, 1));
     };
     const derivedHeatmapData = dateKeys.map((dateKey) => {
       const bucket = dateBuckets[dateKey] || [];
       const weighted = bucket.map((e) => {
         const prob = getSessionDisplayProbability(e.raw, personalCaptureBaselineSec);
-        if (!isFiniteNumber(prob))
-          return null;
+        if (!isFiniteNumber(prob)) return null;
         const weight = getDailyCaptureWeight(e);
-        return weight > 0 ? { prob, weight } : null;
+        const isDoomSess = prob >= DOOM_THRESHOLD;
+        return weight > 0 ? { prob, weight, isDoomSess } : null;
       }).filter(Boolean);
       const totalWeight = weighted.length ? weighted.reduce((sum, e) => sum + e.weight, 0) : 0;
       const avgCapture = totalWeight > 0 ? weighted.reduce((sum, e) => sum + e.prob * e.weight, 0) / totalWeight : null;
+      const doomRate = avgCapture;
       const labels = deriveHeatmapLabels(dateKey, dateKey.slice(5));
       return {
         date: dateKey,
         dayLabel: labels.dayLabel,
         dateLabel: labels.dateLabel,
         avgCapture,
+        doomRate,
         riskLevel: null,
         sessionCount: bucket.length
       };
@@ -3466,11 +3414,12 @@
         totalSurveyed: withMood.length + withRegret.length
       };
     })();
+    const hasTodaySessionEvidence = todaySessionsDetailed.length > 0;
     const avgSessions = maybeNum(rawData?.avgSessions) ?? derivedAvgSessions;
-    const sessionsToday = maybeNum(rawData?.sessionsToday) ?? derivedSessionsToday;
-    const todayVsAvgDelta = maybeNum(rawData?.todayVsAvgDelta) ?? (isFiniteNumber(sessionsToday) && isFiniteNumber(avgSessions) && avgSessions > 0 ? (sessionsToday - avgSessions) / avgSessions * 100 : null);
-    const activeTimeTodaySeconds = maybeNum(rawData?.activeTimeTodaySeconds) ?? derivedActiveTodaySeconds;
-    const activeTimeToday = typeof rawData?.activeTimeToday === "string" && rawData.activeTimeToday ? rawData.activeTimeToday : isFiniteNumber(activeTimeTodaySeconds) ? formatDurationSec(activeTimeTodaySeconds) : null;
+    const sessionsToday = hasTodaySessionEvidence ? maybeNum(rawData?.sessionsToday) ?? derivedSessionsToday ?? todaySessionsDetailed.length : 0;
+    const todayVsAvgDelta = hasTodaySessionEvidence ? maybeNum(rawData?.todayVsAvgDelta) ?? (isFiniteNumber(sessionsToday) && isFiniteNumber(avgSessions) && avgSessions > 0 ? (sessionsToday - avgSessions) / avgSessions * 100 : null) : null;
+    const activeTimeTodaySeconds = hasTodaySessionEvidence ? maybeNum(rawData?.activeTimeTodaySeconds) ?? derivedActiveTodaySeconds : 0;
+    const activeTimeToday = hasTodaySessionEvidence && (typeof rawData?.activeTimeToday === "string" && rawData.activeTimeToday) ? rawData.activeTimeToday : isFiniteNumber(activeTimeTodaySeconds) ? formatDurationSec(activeTimeTodaySeconds) : null;
     const dataSinceDate = typeof rawData?.dataSinceDate === "string" && rawData.dataSinceDate || typeof rawData?.startDate === "string" && rawData.startDate || earliestDateKey || null;
     const last3SessionAutopilotRates = safeArr(rawData?.last3SessionAutopilotRates).filter(isFiniteNumber);
     const derivedLast3SessionAutopilotRates = sessionProbabilities.slice(-7).map((p) => Math.round(p * 100));
@@ -3480,8 +3429,9 @@
       sessionsToday,
       activeTimeToday,
       activeTimeTodaySeconds,
-      interactionsToday: maybeNum(rawData?.interactionsToday) ?? derivedInteractionsToday,
-      capturedSessionsToday: derivedCapturedToday ?? maybeNum(rawData?.capturedSessionsToday),
+      todayAvgReels: hasTodaySessionEvidence ? maybeNum(rawData?.todayAvgReels) ?? derivedTodayAvgReels : null,
+      interactionsToday: hasTodaySessionEvidence ? maybeNum(rawData?.interactionsToday) ?? derivedInteractionsToday : 0,
+      capturedSessionsToday: hasTodaySessionEvidence ? derivedCapturedToday ?? maybeNum(rawData?.capturedSessionsToday) : 0,
       avgSessionDurationSec: maybeNum(rawData?.avgSessionDurationSec) ?? derivedAvgSessionDurationSec,
       avgReelsPerSession: maybeNum(rawData?.avgReelsPerSession) ?? maybeNum(rawData?.avgNReels) ?? derivedAvgReelsPerSession,
       avgDwellTimeSec: maybeNum(rawData?.avgDwellTimeSec) ?? derivedAvgDwellTimeSec,
@@ -3518,7 +3468,7 @@
       dataSinceDate,
       totalSessions: sessions.length,
       avgSessions,
-      avgActiveTimeTodaySeconds: maybeNum(rawData?.avgActiveTimeTodaySeconds) ?? derivedAvgActiveTimeTodaySeconds,
+      avgActiveTimeTodaySeconds: hasTodaySessionEvidence ? maybeNum(rawData?.avgActiveTimeTodaySeconds) ?? derivedAvgActiveTimeTodaySeconds : 0,
       last3SessionAutopilotRates: last3SessionAutopilotRates.length ? last3SessionAutopilotRates : derivedLast3SessionAutopilotRates,
       confidenceBreakdown: rawData?.model_confidence_breakdown || null
     };
@@ -3659,6 +3609,7 @@
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [splashDone, setSplashDone] = useState(false);
+    const [forceOnboarding, setForceOnboarding] = useState(false);
     const checkA11y = () => typeof window.Android?.isAccessibilityEnabled === "function" ? !!window.Android.isAccessibilityEnabled() : false;
     const [isAccessibilityActive, setIsAccessibilityActive] = useState(checkA11y);
     useEffect(() => {
@@ -3676,10 +3627,6 @@
         clearInterval(id);
         window.removeEventListener("a11y-status", onStatus);
       };
-    }, []);
-    useEffect(() => {
-      const tid = setTimeout(() => setSplashDone(true), 4e3);
-      return () => clearTimeout(tid);
     }, []);
     const openAccessibilitySettings = () => {
       if (window.Android && window.Android.enableAccessibility) {
@@ -3718,44 +3665,18 @@
         window.reactDataCallback = null;
       };
     }, []);
-    useEffect(() => {
-      if (!window.Android || typeof window.Android.drainPendingRetroactiveLabel !== "function") return;
-      const poll = () => {
-        try {
-          const b64 = window.Android.drainPendingRetroactiveLabel();
-          if (b64 && b64.length > 0) {
-            const json = atob(b64);
-            const label = JSON.parse(json);
-            console.log("[Bridge] Received retroactive label update:", label);
-            setRawData((prev) => {
-              if (!prev) return prev;
-              const patch = (list) => safeArr(list).map((s) => {
-                if (String(s.sessionNum) === String(label.sessionNum) && s.date === label.date) {
-                  return { ...s, ...label };
-                }
-                return s;
-              });
-              return {
-                ...prev,
-                sessions: patch(prev.sessions),
-                todaySessions: patch(prev.todaySessions)
-              };
-            });
-          }
-        } catch (err) {
-          console.error("[Bridge] Failed to drain retroactive label:", err);
-        }
-      };
-      const id = setInterval(poll, 2e3);
-      return () => clearInterval(id);
-    }, []);
-    const data = useMemo(() => rawData ? normalizeData(rawData) : null, [rawData]);
+    const data = useMemo(() => rawData ? normalizeData(rawData) : {}, [rawData]);
     if (loading) return /* @__PURE__ */ React.createElement(LoadingState, null);
     if (error) {
       return /* @__PURE__ */ React.createElement("div", { style: { minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: D.bg, color: "#FF3B3B", padding: 20, textAlign: "center" } }, "\u26A0\uFE0F ", error);
     }
     const hasData = rawData && safeArr(rawData.sessions).length > 0;
-    if (!hasData || !splashDone) return /* @__PURE__ */ React.createElement(OnboardingState, null);
+    if (!splashDone || forceOnboarding) {
+      return /* @__PURE__ */ React.createElement(OnboardingState, { onContinue: () => {
+        setSplashDone(true);
+        setForceOnboarding(false);
+      } });
+    }
     return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "center", minHeight: "100vh", background: "#EDE8DF", alignItems: "flex-start" } }, /* @__PURE__ */ React.createElement(Styles, null), /* @__PURE__ */ React.createElement(
       "div",
       {
@@ -3766,7 +3687,7 @@
       },
       /* @__PURE__ */ React.createElement("div", { className: "scanlines" }),
       /* @__PURE__ */ React.createElement(ReelioHeader, { data, isAccessibilityActive, openAccessibilitySettings }),
-      /* @__PURE__ */ React.createElement("div", { style: { overflowY: "auto", flex: 1, paddingBottom: 80 } }, screen === "home" && /* @__PURE__ */ React.createElement(MonitorScreen, { data }), screen === "calendar" && /* @__PURE__ */ React.createElement(CaptureCalendarScreen, { data }), screen === "dashboard" && /* @__PURE__ */ React.createElement(DashboardScreen, { data }), screen === "settings" && /* @__PURE__ */ React.createElement(SettingsScreen, { data })),
+      /* @__PURE__ */ React.createElement("div", { style: { overflowY: "auto", flex: 1, paddingBottom: 80 } }, screen === "home" && /* @__PURE__ */ React.createElement(MonitorScreen, { data }), screen === "calendar" && /* @__PURE__ */ React.createElement(CaptureCalendarScreen, { data }), screen === "dashboard" && /* @__PURE__ */ React.createElement(DashboardScreen, { data }), screen === "settings" && /* @__PURE__ */ React.createElement(SettingsScreen, { data, onShowOnboarding: () => setForceOnboarding(true) })),
       /* @__PURE__ */ React.createElement("div", { className: "tab-bar" }, [
         { id: "home", icon: TabIconMonitor, label: "Monitor" },
         { id: "calendar", icon: TabIconCalendar, label: "Calendar" },

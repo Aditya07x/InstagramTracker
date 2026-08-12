@@ -4,11 +4,10 @@
 
     <uses-permission android:name="android.permission.BIND_ACCESSIBILITY_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" tools:ignore="ProtectedPermissions"/>
-    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
 
     <application
@@ -45,30 +44,11 @@
             android:launchMode="singleTask" />
 
         <activity
-            android:name=".RetroactiveSurveyActivity"
-            android:theme="@style/Theme.InstagramTracker"
-            android:taskAffinity=""
-            android:excludeFromRecents="true"
-            android:exported="false"
-            android:launchMode="singleTask" />
-
-        <activity
             android:name=".IntentionProbeActivity"
             android:theme="@style/Theme.InstagramTracker"
             android:taskAffinity=""
             android:excludeFromRecents="true"
             android:launchMode="singleTask" />
-
-        <activity
-            android:name=".DelayedProbeActivity"
-            android:theme="@style/Theme.InstagramTracker"
-            android:taskAffinity=""
-            android:excludeFromRecents="true"
-            android:launchMode="singleTask" />
-
-        <receiver
-            android:name=".DelayedProbeReceiver"
-            android:exported="false" />
 
         <receiver
             android:name=".PostSurveyReceiver"
@@ -77,7 +57,7 @@
         <service
             android:name=".InstaAccessibilityService"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
-            android:foregroundServiceType="specialUse"
+            android:foregroundServiceType="dataSync"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService" />
@@ -85,9 +65,6 @@
             <meta-data
                 android:name="android.accessibilityservice"
                 android:resource="@xml/accessibility_service_config" />
-            <property
-                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="monitoringService"/>
         </service>
 
         <provider

@@ -52,24 +52,24 @@ class IntentionProbeActivity : Activity() {
         layout.addView(SurveyUIUtils.createGradientTitle(this, "Right now I feel...", "#6B3FA0"))
         layout.addView(SurveyUIUtils.createSubtitle(this, "take a moment to check in"))
 
-        val cardStartIdx = layout.childCount
         val stressOptions = listOf(
-            Triple("Calm and focused",        "", "#3A9E6F") to 1,
-            Triple("A bit restless or bored", "", "#6B3FA0") to 6,
-            Triple("Stressed or overwhelmed", "", "#C4563A") to 10,
-            Triple("Tired / winding down",    "", "#9B6FCC") to 7,
-            Triple("Fine, just taking a break","", "#C4973A") to 2
+            SurveyUIUtils.KnobOption("Calm and focused", "#3A9E6F") to 1,
+            SurveyUIUtils.KnobOption("A bit restless or bored", "#6B3FA0") to 6,
+            SurveyUIUtils.KnobOption("Stressed or overwhelmed", "#C4563A") to 10,
+            SurveyUIUtils.KnobOption("Tired / winding down", "#9B6FCC") to 7,
+            SurveyUIUtils.KnobOption("Fine, just taking a break", "#C4973A") to 2
         )
 
-        for ((choice, encodedRisk) in stressOptions) {
-            val (label, _, color) = choice
-            layout.addView(
-                SurveyUIUtils.createOptionButton(this, label, accentColor = color) {
-                    moodBefore = encodedRisk
-                    showContextPrompt()
-                }
-            )
-        }
+        layout.addView(
+            SurveyUIUtils.createChoiceKnob(
+                this,
+                stressOptions.map { it.first },
+                hint = "where are you starting from?"
+            ) { index ->
+                moodBefore = stressOptions[index].second
+                showContextPrompt()
+            }
+        )
 
         layout.addView(SurveyUIUtils.createSkipButton(this) {
             moodBefore = 0
@@ -79,8 +79,6 @@ class IntentionProbeActivity : Activity() {
         scroll.addView(layout)
         setContentView(root)
 
-        // Stagger card entrance
-        layout.post { SurveyUIUtils.staggerCards(layout, cardStartIdx, stressOptions.size) }
     }
 
     // ── Step 2: Previous Context ──────────────────────────────────────────────
@@ -94,24 +92,25 @@ class IntentionProbeActivity : Activity() {
         layout.addView(SurveyUIUtils.createGradientTitle(this, "What were you just doing?", "#6B3FA0"))
         layout.addView(SurveyUIUtils.createSubtitle(this, "what was happening before you opened up?"))
 
-        val cardStartIdx = layout.childCount
         val contexts = listOf(
-            Pair("Work / Study",  "#6B3FA0"),
-            Pair("Socializing",   "#9B6FCC"),
-            Pair("Relaxing",      "#3A9E6F"),
-            Pair("Chores / Task", "#C4973A"),
-            Pair("Just woke up",  "#6366F1"),
-            Pair("Boredom",       "#8C7F73")
+            SurveyUIUtils.KnobOption("Work / Study", "#6B3FA0"),
+            SurveyUIUtils.KnobOption("Socializing", "#9B6FCC"),
+            SurveyUIUtils.KnobOption("Relaxing", "#3A9E6F"),
+            SurveyUIUtils.KnobOption("Chores / Task", "#C4973A"),
+            SurveyUIUtils.KnobOption("Just woke up", "#6366F1"),
+            SurveyUIUtils.KnobOption("Boredom", "#8C7F73")
         )
 
-        for ((label, color) in contexts) {
-            layout.addView(
-                SurveyUIUtils.createOptionButton(this, label, accentColor = color) {
-                    previousContext = label
-                    showIntentionPrompt()
-                }
-            )
-        }
+        layout.addView(
+            SurveyUIUtils.createChoiceKnob(
+                this,
+                contexts,
+                hint = "what were you in the middle of?"
+            ) { index ->
+                previousContext = contexts[index].label
+                showIntentionPrompt()
+            }
+        )
 
         layout.addView(SurveyUIUtils.createSkipButton(this) {
             previousContext = "unknown"
@@ -121,7 +120,6 @@ class IntentionProbeActivity : Activity() {
         scroll.addView(layout)
         setContentView(root)
 
-        layout.post { SurveyUIUtils.staggerCards(layout, cardStartIdx, contexts.size) }
     }
 
     // ── Step 3: Intention ─────────────────────────────────────────────────────
@@ -135,23 +133,24 @@ class IntentionProbeActivity : Activity() {
         layout.addView(SurveyUIUtils.createGradientTitle(this, "Why are you opening this?", "#6B3FA0"))
         layout.addView(SurveyUIUtils.createSubtitle(this, "knowing this helps you notice patterns"))
 
-        val cardStartIdx = layout.childCount
         val options = listOf(
-            Pair("Bored / Nothing to do",     "#C4973A"),
-            Pair("Stressed / Avoidance",      "#C4563A"),
-            Pair("Procrastinating something", "#C4973A"),
-            Pair("Habit / Automatic",         "#6B3FA0"),
-            Pair("Quick break (intentional)", "#3A9E6F")
+            SurveyUIUtils.KnobOption("Bored / Nothing to do", "#C4973A"),
+            SurveyUIUtils.KnobOption("Stressed / Avoidance", "#C4563A"),
+            SurveyUIUtils.KnobOption("Procrastinating something", "#C4973A"),
+            SurveyUIUtils.KnobOption("Habit / Automatic", "#6B3FA0"),
+            SurveyUIUtils.KnobOption("Quick break (intentional)", "#3A9E6F")
         )
 
-        for ((label, color) in options) {
-            layout.addView(
-                SurveyUIUtils.createOptionButton(this, label, accentColor = color) {
-                    intendedAction = label
-                    saveAndFinish()
-                }
-            )
-        }
+        layout.addView(
+            SurveyUIUtils.createChoiceKnob(
+                this,
+                options,
+                hint = "what's pulling you in?"
+            ) { index ->
+                intendedAction = options[index].label
+                saveAndFinish()
+            }
+        )
 
         layout.addView(SurveyUIUtils.createSkipButton(this) {
             intendedAction = ""
@@ -161,7 +160,6 @@ class IntentionProbeActivity : Activity() {
         scroll.addView(layout)
         setContentView(root)
 
-        layout.post { SurveyUIUtils.staggerCards(layout, cardStartIdx, options.size) }
     }
 
     // ── Persist + close ───────────────────────────────────────────────────────

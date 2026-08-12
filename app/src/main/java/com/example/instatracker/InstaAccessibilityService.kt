@@ -7,6 +7,8 @@ import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import java.io.File
+import java.io.PrintWriter
+import java.io.StringWriter
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -20,9 +22,11 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.ServiceInfo
 import android.net.Uri
 import android.os.Build
 import android.os.BatteryManager
+import android.os.PowerManager
 import android.media.AudioManager
 import android.media.AudioDeviceInfo
 import android.app.usage.UsageStatsManager
@@ -34,8 +38,8 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import androidx.core.app.NotificationCompat
 import android.app.Notification
-import android.app.AlarmManager
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -45,6 +49,7 @@ import kotlinx.coroutines.launch
 import kotlin.random.Random
 import kotlin.jvm.Volatile
 import java.util.UUID
+import java.util.concurrent.TimeUnit
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
 import com.example.instatracker.db.AppDatabase
@@ -53,6 +58,7 @@ import com.example.instatracker.db.SessionEntity
 class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
 
     private val serviceScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+    private var crashHandlerInstalled = false
 
     private var currentSessionNumber = 0
     private var pendingSessionUuid: String? = null
@@ -105,6 +111,7 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
     private var returnLatencyS = 0L
     private var profileVisits = 0
     private var profileVisitDurationS = 0f
+    private var profileVisitStartMs = 0L
     private var hashtagTaps = 0
     private var notificationsDismissed = 0
     private var notificationsActedOn = 0
@@ -247,17 +254,38 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
 
     // Rolling
     private val dwellWindow = ArrayDeque<Double>()
+
+    private data class AppContextSnapshot(
+        val previousPackage: String,
+        val previousCategory: String,
+        val previousAppDurationS: Float,
+        val directLaunch: Boolean,
+        val sessionTriggeredByNotif: Boolean,
+        val screenOnCount1hr: Int,
+        val screenOnDuration1hr: Long
+    )
     
     companion object {
         private const val WINDOW_SIZE = 5
         private const val PREFS_NAME = "InstaTrackerPrefs"
         private const val ACTION_LOG_TAG = "ReelioAction"
         const val SURVEY_CHANNEL_ID = "survey_channel"
+        private const val KEEPALIVE_CHANNEL_ID = "tracking_keepalive_channel"
+        private const val KEEPALIVE_NOTIFICATION_ID = 9999
         const val SURVEY_NOTIF_ID_BASE = 90000
         private const val REENTRY_NEW_SESSION_GAP_MS = 5_000L
         private const val STATEFUL_INTERACTION_WINDOW_MS = 1_500L
         private const val SURVEY_ACTIVITY_STALE_MS = 15 * 60 * 1000L
         private const val POST_SURVEY_DELAY_MIN_MS = 30_000L
+        private const val MAX_DWELL_ACCEL_SEC = 120.0
+        private const val MAX_DWELL_TREND_SEC = 20.0
+        private const val MAX_EARLY_LATE_RATIO = 10.0
+        private const val MAX_INTERACTION_BURSTINESS = 50.0
+        private const val MAX_INTERACTION_DROPOFF = 1.0
+        private const val MAX_SCROLL_CV = 10.0
+        private const val MAX_SCROLL_ENTROPY = 4.0
+        private const val MAX_LUX_DELTA = 1000f
+        private const val MAX_ACCEL_VARIANCE = 25.0
         private const val POST_SURVEY_DELAY_MAX_MS = 45_000L
         private const val POST_SURVEY_REQUEST_CODE_OFFSET = 2_000
         private const val MIN_REELS_FOR_POST_SURVEY = 1
@@ -360,13 +388,7 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
         lastActiveTime = System.currentTimeMillis()
         
         createNotificationChannel()
-        // SDK 34 requires explicit foreground service type
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(9999, buildPersistentNotification(),
-                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-        } else {
-            startForeground(9999, buildPersistentNotification())
-        }
+        startForegroundKeepAliveIfNeeded()
         ensureCsvHeader()
         
         try {
@@ -433,25 +455,33 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
                             .apply()
                     }
 
-                    if (lastExitTime == 0L) lastExitTime = now
+                    if (lastExitTime == 0L && type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+                        lastExitTime = now
+                    }
                     checkSessionTimeout(now, packageName)
                 }
                 return
             } else {
+                if (sessionStartTime != null && (now - lastActiveTime) > 300_000L) {
+                    // Force timeout for Instagram if idle for > 5mins and they scroll
+                    Log.i("ReelioDiag", "Instagram idle > 5 mins, ending session")
+                    endCurrentSession(lastActiveTime)
+                    startNewSession(now)
+                }
+
                 if (lastExitTime != 0L) {
                     val exitDuration = now - lastExitTime
-                    if (sessionStartTime != null && exitDuration >= REENTRY_NEW_SESSION_GAP_MS) {
-                        // If user left Instagram and came back after a short gap,
-                        // split sessions immediately so post-survey can fire and
-                        // next entry can show a fresh pre-session prompt.
+                    if (sessionStartTime != null && exitDuration >= 60_000L) {
+                        // Increase gap to 60s to prevent accidental splits while scrolling
                         endCurrentSession(lastActiveTime)
-                    } else if (exitDuration < 20_000L) {
+                    } else if (exitDuration < 60_000L) {
                         // Only count as exit-attempt if user was actively in the reel feed.
                         // lastScrollTime tracks the last reel-feed scroll; 10s threshold means
                         // "the last thing they were doing was scrolling reels."
                         val timeSinceLastReelActivity = now - lastScrollTime
                         if (currentReelIndex != null && reelCount > 0 && timeSinceLastReelActivity < 10_000L) {
                             appExitAttempts++
+                            returnLatencyS = max(returnLatencyS, exitDuration / 1000L)
                         }
                     }
                     lastExitTime = 0L
@@ -526,6 +556,7 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
                     }
                     if (desc.contains("profile") || text.contains("profile")) {
                         profileVisits++
+                        profileVisitStartMs = now
                     }
                     if (text.startsWith("#") || desc.startsWith("#")) {
                         hashtagTaps++
@@ -646,6 +677,8 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
                     return
                 }
 
+                finalizeProfileVisit(now)
+
                 swipeAttempts++
                 val fromIdx = event.fromIndex
                 if (fromIdx > -1) {
@@ -724,33 +757,39 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
                             lastReelSettleJob?.cancel()
                             val capturedTarget = newIndex
                             lastReelSettleJob = serviceScope.launch(Dispatchers.Main) {
-                                delay(150L) // 150ms: real swipe completes in ~100-130ms
-                                val current = currentReelIndex ?: return@launch
-                                if (capturedTarget != current) {
+                                try {
+                                    delay(150L) // 150ms: real swipe completes in ~100-130ms
+                                    val current = currentReelIndex ?: return@launch
+                                    if (capturedTarget != current) {
 
-                                    // Account for skipped reels (fast multi-swipe).
-                                    // If user swiped from reel 1 to reel 9, reels 2-8
-                                    // were never dwelled on but ARE real automaticity
-                                    // signal. We increment reel/session counters so the
-                                    // next recorded row reflects the true reel position.
-                                    // We do NOT write individual rows for skipped reels
-                                    // because we have no per-reel data for them.
-                                    val skippedCount = Math.abs(capturedTarget - current) - 1
-                                    if (skippedCount > 0) {
-                                        likeStreakLength = 0 // rapid skips reset like streak
+                                        // Account for skipped reels (fast multi-swipe).
+                                        // If user swiped from reel 1 to reel 9, reels 2-8
+                                        // were never dwelled on but ARE real automaticity
+                                        // signal. We increment reel/session counters so the
+                                        // next recorded row reflects the true reel position.
+                                        // We do NOT write individual rows for skipped reels
+                                        // because we have no per-reel data for them.
+                                        val skippedCount = Math.abs(capturedTarget - current) - 1
+                                        if (skippedCount > 0) {
+                                            likeStreakLength = 0 // rapid skips reset like streak
+                                        }
+
+                                        processPreviousReel(System.currentTimeMillis())
+                                        // NOTE: We intentionally do NOT inflate reelCount
+                                        // or cumulativeReels for skipped reels.  Only reels
+                                        // that produce a CSV row (with dwell/interaction data)
+                                        // should be counted. Inflating the counters here was
+                                        // causing 1-reel sessions to appear as 139-reel sessions
+                                        // in the CSV because CumulativeReels diverged from the
+                                        // actual number of recorded rows.
+                                        currentReelIndex = capturedTarget
+                                        settleTargetIndex = -1
+                                        startNextReel(System.currentTimeMillis())
                                     }
-
-                                    processPreviousReel(System.currentTimeMillis())
-                                    // NOTE: We intentionally do NOT inflate reelCount
-                                    // or cumulativeReels for skipped reels.  Only reels
-                                    // that produce a CSV row (with dwell/interaction data)
-                                    // should be counted. Inflating the counters here was
-                                    // causing 1-reel sessions to appear as 139-reel sessions
-                                    // in the CSV because CumulativeReels diverged from the
-                                    // actual number of recorded rows.
-                                    currentReelIndex = capturedTarget
-                                    settleTargetIndex = -1
-                                    startNextReel(System.currentTimeMillis())
+                                } catch (_: CancellationException) {
+                                    // Expected when a newer scroll event supersedes this pending settle.
+                                } catch (t: Throwable) {
+                                    Log.e("InstaTracker", "reel settle job failed", t)
                                 }
                             }
                         }
@@ -831,7 +870,12 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
         if (sessionStartTime == null || currentReelIndex != null || reelCount > 0) return
 
         val rootNode = rootInActiveWindow?.let { AccessibilityNodeInfo.obtain(it) } ?: return
-        if (!ReelContextDetector.isInReelContext(rootNode, resources)) return
+        val inReelContext = ReelContextDetector.isInReelContext(rootNode, resources)
+        logAction(
+            "reel_bootstrap_check",
+            "inReelContext=${if (inReelContext) 1 else 0} state='${compactLogValue(currentInteractionStateForLog(), 240)}'"
+        )
+        if (!inReelContext) return
 
         currentReelIndex = 0
         startNextReel(now)
@@ -906,6 +950,13 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
         
         lastReelStartTime = now
         lastInteractionGestureAt = 0L
+
+        if (reelCount == 2) {
+            val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            if (prefs.getBoolean("is_survey_session", false)) {
+                showIntentionPrompt()
+            }
+        }
         
         scrollDistances.clear()
         accelMagnitudes.clear()
@@ -934,6 +985,8 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
         swipeAttempts = 0
         cleanSwipes = 0
         profileVisits = 0
+        profileVisitDurationS = 0f
+        profileVisitStartMs = 0L
         hashtagTaps = 0
         
         if (!previousReelNetLiked) likeStreakLength = 0
@@ -959,6 +1012,7 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
         lastWrittenCumulativeReel = cumulativeReels
 
         if (reelCount % 10 == 0) Log.i("ReelioDiag", "Reel heartbeat: reel=$reelCount PID=${android.os.Process.myPid()}")
+        finalizeProfileVisit(now)
         val dwell = computeDwell(now)
         sessionDwellTimes.add(dwell.sec)
         if (sessionDwellTimes.size > 200) sessionDwellTimes.removeAt(0)
@@ -980,11 +1034,20 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
         backScrollCount = 0
         ambientLuxStart = ambientLuxEnd
         appExitAttempts = 0
+        returnLatencyS = 0L
     }
 
     private fun currentInteractionStateForLog(): String {
         val netLiked = (likeEventCount % 2) == 1
         return "liked=${if (netLiked) 1 else 0}(events=$likeEventCount) commented=${if (commented) 1 else 0} shared=${if (shared) 1 else 0} saved=${if (saved) 1 else 0} likeLatencyMs=$likeLatencyMs commentLatencyMs=$commentLatencyMs shareLatencyMs=$shareLatencyMs saveLatencyMs=$saveLatencyMs savedWithoutLike=${if (savedWithoutLike) 1 else 0} commentAbandoned=${if (commentAbandoned) 1 else 0}"
+    }
+
+    private fun clip(value: Double, minValue: Double, maxValue: Double): Double {
+        return value.coerceIn(minValue, maxValue)
+    }
+
+    private fun clip(value: Float, minValue: Float, maxValue: Float): Float {
+        return value.coerceIn(minValue, maxValue)
     }
 
     private fun compactLogValue(value: String, maxLen: Int = 120): String {
@@ -994,6 +1057,15 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
             .trim()
         if (normalized.isBlank()) return "-"
         return if (normalized.length <= maxLen) normalized else normalized.take(maxLen - 3) + "..."
+    }
+
+    private fun csvSafe(value: String): String {
+        return value
+            .replace(',', ' ')
+            .replace('\n', ' ')
+            .replace('\r', ' ')
+            .replace('\t', ' ')
+            .trim()
     }
 
     private fun eventTypeName(eventType: Int): String {
@@ -1132,13 +1204,11 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
             prefs.edit().putString("first_session_times", firstSessionTimes.joinToString(",")).apply()
         }
         
-        if (firstSessionTimes.size > 1) {
-            val mean = firstSessionTimes.average()
-            val vr = firstSessionTimes.map { (it - mean)*(it - mean) }.average()
-            consistencyScore = (1.0 / (1.0 + sqrt(vr))).toFloat()
-        } else {
-            consistencyScore = 1.0f
-        }
+        consistencyScore = computeConsistencyScore(firstSessionTimes)
+
+        val sleepStart = prefs.getInt("sleep_start_hour", 23)
+        val sleepEnd = prefs.getInt("sleep_end_hour", 7)
+        estimatedSleepDurationH = estimateSleepDurationHours(lastSessionEnd, now, sleepStart, sleepEnd)
         
         sessionsToday++
         
@@ -1182,7 +1252,6 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
             .remove("last_microprobe_result")
             .apply()
 
-        if (isSurveySession) showIntentionPrompt()
         // -----------------------------------------------------
         
         cumulativeReels = 0
@@ -1270,6 +1339,7 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
     }
     
     private fun captureSystemContext() {
+        val now = System.currentTimeMillis()
         val batteryIntent = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         batteryLevelStart = batteryIntent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
         val status = batteryIntent?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
@@ -1300,13 +1370,15 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
         dndActive = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             notificationManager.currentInterruptionFilter != NotificationManager.INTERRUPTION_FILTER_ALL
         } else false
-        
-        previousApp = "unknown"
-        previousAppCategory = "unknown"
-        previousAppDurationS = 0f
-        directLaunch = false
-        screenOnCount1hr = 0
-        screenOnDuration1hr = 0L
+
+        val snapshot = captureAppContextSnapshot(now)
+        previousApp = snapshot.previousPackage
+        previousAppCategory = snapshot.previousCategory
+        previousAppDurationS = snapshot.previousAppDurationS
+        directLaunch = snapshot.directLaunch
+        sessionTriggeredByNotif = snapshot.sessionTriggeredByNotif
+        screenOnCount1hr = snapshot.screenOnCount1hr
+        screenOnDuration1hr = snapshot.screenOnDuration1hr
     }
 
     private fun resetSessionTimer(now: Long) {
@@ -1328,6 +1400,7 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
         try {
             lastReelSettleJob?.cancel()
             if (sessionStartTime == null) return
+            finalizeProfileVisit(endTime)
             val savedSessionStart = sessionStartTime!!
             val batteryIntent = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
             batteryLevelEnd = batteryIntent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
@@ -1400,39 +1473,6 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
         }
     }
     
-    private fun schedulePostSessionProbes(sessionEndTime: Long, sessionNum: Int, doomScore: Float, isSurveySession: Boolean) {
-        // Only schedule delayed probe for sessions that were actually sampled.
-        if (!isSurveySession) return
-        if (doomScore < 0.35f) return
-
-        val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        val intent = Intent(this, DelayedProbeReceiver::class.java).apply {
-            putExtra("session_num", sessionNum)
-        }
-        val pending = PendingIntent.getBroadcast(
-            this,
-            sessionNum + 5000,
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        // SCHEDULE_EXACT_ALARM requires explicit user grant on API 31+.
-        // Fall back to inexact alarm if permission not yet granted.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !alarmManager.canScheduleExactAlarms()) {
-            Log.w("InstaTracker", "Exact alarm permission not granted — using inexact delayed-probe alarm")
-            alarmManager.setAndAllowWhileIdle(
-                AlarmManager.RTC_WAKEUP,
-                sessionEndTime + 60 * 60 * 1000L,
-                pending
-            )
-        } else {
-            alarmManager.setExactAndAllowWhileIdle(
-                AlarmManager.RTC_WAKEUP,
-                sessionEndTime + 60 * 60 * 1000L,
-                pending
-            )
-        }
-    }
-
     private fun queuePostSurveyForCurrentSession(
         sessionEndTime: Long,
         sessionNum: Int,
@@ -1467,7 +1507,7 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
         val delayMs = Random.nextLong(POST_SURVEY_DELAY_MIN_MS, POST_SURVEY_DELAY_MAX_MS + 1)
         val triggerAt = sessionEndTime + delayMs
         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val alarmManager = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
         val intent = Intent(this, PostSurveyReceiver::class.java).apply {
             putExtra("session_num", sessionNum)
         }
@@ -1480,9 +1520,9 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !alarmManager.canScheduleExactAlarms()) {
             Log.w("InstaTracker", "Exact alarm permission not granted - using inexact post-survey alarm")
-            alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pending)
+            alarmManager.setAndAllowWhileIdle(android.app.AlarmManager.RTC_WAKEUP, triggerAt, pending)
         } else {
-            alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pending)
+            alarmManager.setExactAndAllowWhileIdle(android.app.AlarmManager.RTC_WAKEUP, triggerAt, pending)
         }
 
         serviceScope.launch(Dispatchers.IO) {
@@ -1492,7 +1532,7 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
     }
 
     private fun cancelPostSurveyAlarm(sessionNum: Int) {
-        val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val alarmManager = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
         val intent = Intent(this, PostSurveyReceiver::class.java)
         val pending = PendingIntent.getBroadcast(
             this,
@@ -1546,126 +1586,104 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
                 var doomScore = 0f
                 var doomLabel = "UNSCORED"
                 var modelConf = 0f
-                
-                val lockWaitStart = System.currentTimeMillis()
-                Log.i("ReelioDiag", "Service awaiting PYTHON_LOCK. time=$lockWaitStart PID=${android.os.Process.myPid()}")
-                synchronized(GLOBAL_PYTHON_LOCK) {
-                    val lockAcquired = System.currentTimeMillis()
-                    Log.i("ReelioDiag", "Service acquired PYTHON_LOCK. waited=${lockAcquired - lockWaitStart}ms")
+                if (shouldRunPythonInferenceInService()) {
+                    val lockWaitStart = System.currentTimeMillis()
+                    Log.i("ReelioDiag", "Service awaiting PYTHON_LOCK. time=$lockWaitStart PID=${android.os.Process.myPid()}")
+                    synchronized(GLOBAL_PYTHON_LOCK) {
+                        val lockAcquired = System.currentTimeMillis()
+                        Log.i("ReelioDiag", "Service acquired PYTHON_LOCK. waited=${lockAcquired - lockWaitStart}ms")
+                        try {
+                            if (!Python.isStarted()) {
+                                Python.start(AndroidPlatform(this@InstaAccessibilityService))
+                            }
+                            val py = Python.getInstance()
+                            val reelioModule = py.getModule("reelio_alse")
+
+                            val file = File(filesDir, "insta_data.csv")
+                            val cappedCsv = if (file.exists()) {
+                                val lines = file.readLines()
+                                if (lines.size > 2) {
+                                    val header1 = lines[0] // SCHEMA_VERSION
+                                    val header2 = lines[1] // Column names
+                                    val dataLines = lines.drop(2)
+                                    (listOf(header1, header2) + dataLines.takeLast(200)).joinToString("\n")
+                                } else {
+                                    lines.joinToString("\n")
+                                }
+                            } else ""
+
+                            val statePath = File(filesDir, "alse_model_state.json").absolutePath
+
+                            val pyDict = py.getBuiltins().callAttr("dict")
+                            pyDict.callAttr("__setitem__", "PostSessionRating", rat)
+                            pyDict.callAttr("__setitem__", "IntendedAction", act)
+                            pyDict.callAttr("__setitem__", "ActualVsIntendedMatch", if (mat) 1 else 0)
+                            pyDict.callAttr("__setitem__", "RegretScore", reg)
+                            pyDict.callAttr("__setitem__", "MoodBefore", mBf)
+                            pyDict.callAttr("__setitem__", "MoodAfter", mAf)
+                            // Delayed regret survey feature was removed — column stays in the CSV
+                            // schema (avoids a schema migration) but is always 0 going forward.
+                            pyDict.callAttr("__setitem__", "DelayedRegretScore", 0)
+                            pyDict.callAttr("__setitem__", "ComparativeRating", if (hasCompletedSurveyForThisSession) prefs.getInt("comparative_rating", 0) else 0)
+                            pyDict.callAttr("__setitem__", "MorningRestScore", prefs.getInt("morning_rest_score", 0))
+                            pyDict.callAttr("__setitem__", "PreviousContext", prefs.getString("previous_context", "unknown") ?: "unknown")
+
+                            val result = reelioModule.callAttr("run_inference_on_latest", cappedCsv, statePath, pyDict)
+                            val resultMap = result.asMap()
+
+                            val scoreObj = resultMap[py.getBuiltins().callAttr("str", "doom_score")]
+                            if (scoreObj != null) doomScore = scoreObj.toFloat()
+
+                            val labelObj = resultMap[py.getBuiltins().callAttr("str", "doom_label")]
+                            if (labelObj != null) doomLabel = labelObj.toString()
+
+                            val confObj = resultMap[py.getBuiltins().callAttr("str", "model_confidence")]
+                            if (confObj != null) modelConf = confObj.toFloat()
+
+                            // Log explicit validation warning if present
+                            val validationWarningObj = resultMap[py.getBuiltins().callAttr("str", "validation_warning")]
+                            if (validationWarningObj != null) {
+                                val warningMsg = validationWarningObj.toString()
+                                if (warningMsg.isNotBlank()) {
+                                    Log.w("ALSE", "Model validation warning: $warningMsg")
+                                }
+                            }
+
+                            android.util.Log.d("ALSE", "HMM Result: label=$doomLabel score=$doomScore conf=$modelConf")
+                        } catch (t: Throwable) {
+                            android.util.Log.e("ALSE", "Python inference failed: ${t.message}")
+                            doomScore = computeKotlinFallbackScore()
+                            doomLabel = "UNSCORED"
+                            modelConf = 0.0f
+                        } finally {
+                            Log.i("ReelioDiag", "Service releasing PYTHON_LOCK. time=${System.currentTimeMillis()} PID=${android.os.Process.myPid()}")
+                        }
+                    }
+                } else {
+                    doomScore = computeKotlinFallbackScore()
+                    doomLabel = "FALLBACK"
+                    modelConf = 0.0f
+                    Log.i("ALSE", "Background Python inference disabled for stability; using Kotlin fallback score.")
+                }
+
+                getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+                    .remove("last_microprobe_result")
+                    .putFloat("last_session_doom_score", doomScore)
+                    .apply()
+
+                if (isSurveySession && hasMeaningfulReelActivity && preGeneratedUuid != null) {
                     try {
-                        if (!Python.isStarted()) {
-                            Python.start(AndroidPlatform(this@InstaAccessibilityService))
-                        }
-                        val py = Python.getInstance()
-                        val reelioModule = py.getModule("reelio_alse")
-                        
-                        val file = File(filesDir, "insta_data.csv")
-                        val cappedCsv = if (file.exists()) {
-                            val lines = file.readLines()
-                            if (lines.size > 2) {
-                                val header1 = lines[0] // SCHEMA_VERSION
-                                val header2 = lines[1] // Column names
-                                val dataLines = lines.drop(2)
-                                (listOf(header1, header2) + dataLines.takeLast(200)).joinToString("\n")
-                            } else {
-                                lines.joinToString("\n")
-                            }
-                        } else ""
-                        
-                        val statePath = File(filesDir, "alse_model_state.json").absolutePath
-                        
-                        val pyDict = py.getBuiltins().callAttr("dict")
-                        pyDict.callAttr("__setitem__", "PostSessionRating", rat)
-                        pyDict.callAttr("__setitem__", "IntendedAction", act)
-                        pyDict.callAttr("__setitem__", "ActualVsIntendedMatch", if (mat) 1 else 0)
-                        pyDict.callAttr("__setitem__", "RegretScore", reg)
-                        pyDict.callAttr("__setitem__", "MoodBefore", mBf)
-                        pyDict.callAttr("__setitem__", "MoodAfter", mAf)
-                        pyDict.callAttr("__setitem__", "DelayedRegretScore", if (hasCompletedSurveyForThisSession) prefs.getInt("delayed_regret_score_${currentSessionNumber}", 0) else 0)
-                        pyDict.callAttr("__setitem__", "ComparativeRating", if (hasCompletedSurveyForThisSession) prefs.getInt("comparative_rating", 0) else 0)
-                        pyDict.callAttr("__setitem__", "MorningRestScore", prefs.getInt("morning_rest_score", 0))
-                        pyDict.callAttr("__setitem__", "PreviousContext", prefs.getString("previous_context", "unknown") ?: "unknown")
-
-                        val result = reelioModule.callAttr("run_inference_on_latest", cappedCsv, statePath, pyDict)
-                        val resultMap = result.asMap()
-
-                        val scoreObj = resultMap[py.getBuiltins().callAttr("str", "doom_score")]
-                        if (scoreObj != null) doomScore = scoreObj.toFloat()
-
-                        val labelObj = resultMap[py.getBuiltins().callAttr("str", "doom_label")]
-                        if (labelObj != null) doomLabel = labelObj.toString()
-
-                        val confObj = resultMap[py.getBuiltins().callAttr("str", "model_confidence")]
-                        if (confObj != null) modelConf = confObj.toFloat()
-
-                        // Log explicit validation warning if present
-                        val validationWarningObj = resultMap[py.getBuiltins().callAttr("str", "validation_warning")]
-                        if (validationWarningObj != null) {
-                            val warningMsg = validationWarningObj.toString()
-                            if (warningMsg.isNotBlank()) {
-                                Log.w("ALSE", "Model validation warning: $warningMsg")
-                            }
-                        }
-
-                        android.util.Log.d("ALSE", "HMM Result: label=$doomLabel score=$doomScore conf=$modelConf")
-
-                        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
-                            .remove("last_microprobe_result")
-                            .putFloat("last_session_doom_score", doomScore)
-                            .apply()
-
-                        if (isSurveySession && hasMeaningfulReelActivity && preGeneratedUuid != null) {
-                            try {
-                                queuePostSurveyForCurrentSession(
-                                    sessionEndTime = eTime,
-                                    sessionNum = sessionNum,
-                                    sessionUuid = preGeneratedUuid,
-                                    doomScore = doomScore
-                                )
-                            } catch (e: Exception) {
-                                android.util.Log.w("InstaTracker", "queuePostSurveyForCurrentSession failed (non-fatal): ${e.message}")
-                            }
-                        }
-
-                        try {
-                            schedulePostSessionProbes(eTime, sessionNum, doomScore, isSurveySession)
-                        } catch (e: Exception) {
-                            android.util.Log.w("InstaTracker", "schedulePostSessionProbes failed (non-fatal): ${e.message}")
-                        }
-                    } catch (t: Throwable) {
-                        android.util.Log.e("ALSE", "Python inference failed: ${t.message}")
-                        doomScore = computeKotlinFallbackScore()
-                        doomLabel = "UNSCORED"
-                        modelConf = 0.0f
-
-                        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
-                            .remove("last_microprobe_result")
-                            .putFloat("last_session_doom_score", doomScore)
-                            .apply()
-
-                        if (isSurveySession && hasMeaningfulReelActivity && preGeneratedUuid != null) {
-                            try {
-                                queuePostSurveyForCurrentSession(
-                                    sessionEndTime = eTime,
-                                    sessionNum = sessionNum,
-                                    sessionUuid = preGeneratedUuid,
-                                    doomScore = doomScore
-                                )
-                            } catch (e: Exception) {
-                                android.util.Log.w("InstaTracker", "queuePostSurveyForCurrentSession failed after fallback score: ${e.message}")
-                            }
-                        }
-
-                        try {
-                            schedulePostSessionProbes(eTime, sessionNum, doomScore, isSurveySession)
-                        } catch (e: Exception) {
-                            android.util.Log.w("InstaTracker", "schedulePostSessionProbes failed after fallback score: ${e.message}")
-                        }
-                    } finally {
-                        Log.i("ReelioDiag", "Service releasing PYTHON_LOCK. time=${System.currentTimeMillis()} PID=${android.os.Process.myPid()}")
+                        queuePostSurveyForCurrentSession(
+                            sessionEndTime = eTime,
+                            sessionNum = sessionNum,
+                            sessionUuid = preGeneratedUuid,
+                            doomScore = doomScore
+                        )
+                    } catch (e: Exception) {
+                        android.util.Log.w("InstaTracker", "queuePostSurveyForCurrentSession failed (non-fatal): ${e.message}")
                     }
                 }
-                
+
                 val db = DatabaseProvider.getDatabase(this@InstaAccessibilityService)
                 // Use the pre-generated UUID if available (survey sessions),
                 // otherwise generate a new one (non-survey sessions).
@@ -1689,7 +1707,7 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
                     sessionDwellTrend = 0f, earlyVsLateRatio = 0f, interactionRate = 0f, interactionDropoff = 0f, scrollIntervalCV = 0f, scrollRhythmEntropy = 0f,
                     sessionsToday = sToday, totalDwellTodayMin = totDwell, longestSessionTodayReels = mReelSt,
                     lastSessionDoomScore = doomScore, rollingDoomRate7d = 0f, doomStreakLength = doomSt, morningSessionExists = mSession,
-                    circadianPhase = cPhase, sleepProxyScore = sProxy, estimatedSleepDurationH = 0f, consistencyScore = constSc,
+                    circadianPhase = cPhase, sleepProxyScore = sProxy, estimatedSleepDurationH = estimatedSleepDurationH, consistencyScore = constSc,
                     postSessionRating = rat, intendedAction = act, actualVsIntendedMatch = mat, regretScore = reg, moodBefore = mBf, moodAfter = mAf, moodDelta = mDl
                 )
                 db.sessionDao().insert(dbSession)
@@ -1706,6 +1724,14 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
                 android.util.Log.e("InstaTracker", "Fatal error in Database Injector Coroutine", t)
             }
         }
+    }
+
+    private fun shouldRunPythonInferenceInService(): Boolean {
+        // Disabled by default because some OEM process managers (notably Vivo ABE)
+        // repeatedly force-stop the accessibility process after heavy background Python loads.
+        // Advanced users can re-enable via shared preference key if needed.
+        return getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getBoolean("enable_background_python_inference", false)
     }
     
     private fun computeDwell(now: Long): DwellResult {
@@ -1727,7 +1753,7 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
         
         val sessionDwellMean = wDwellMean
         val sessionDwellStd = if (wDwellN > 1) sqrt(wDwellM2 / wDwellN) else 1.0
-        val zScore = (dwellSec - sessionDwellMean) / sessionDwellStd.coerceAtLeast(1.0)
+        val zScore = clip((dwellSec - sessionDwellMean) / sessionDwellStd.coerceAtLeast(1.0), -8.0, 8.0)
 
         // Percentile: O(n) insertion-based (capped at 50)
         val insertIdx = sessionSortedDwells.binarySearch(dwellSec).let { if (it < 0) -(it + 1) else it }
@@ -1735,7 +1761,7 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
         if (sessionSortedDwells.size > 50) sessionSortedDwells.removeAt(0)
         val pctile = (insertIdx.toDouble() / sessionSortedDwells.size.coerceAtLeast(1)) * 100.0
         
-        val accel = if (wDwellN > 1) dwellSec - prevDwellSec else 0.0
+        val accel = clip(if (wDwellN > 1) dwellSec - prevDwellSec else 0.0, -MAX_DWELL_ACCEL_SEC, MAX_DWELL_ACCEL_SEC)
         prevDwellSec = dwellSec
 
         // Incremental linear regression for dwell trend
@@ -1744,10 +1770,11 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
         wTrendSumY += dwellSec
         wTrendSumXY += iX * dwellSec
         wTrendSumXX += iX * iX
-        val trend = if (wDwellN > 1) {
+        val trendRaw = if (wDwellN > 1) {
             val denom = (wDwellN * wTrendSumXX - wTrendSumX * wTrendSumX).coerceAtLeast(1.0)
             (wDwellN * wTrendSumXY - wTrendSumX * wTrendSumY) / denom
         } else 0.0
+        val trend = clip(trendRaw, -MAX_DWELL_TREND_SEC, MAX_DWELL_TREND_SEC)
 
         // Early vs late ratio
         if (wDwellN <= 20) {
@@ -1757,9 +1784,9 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
             erSecondHalfSum += dwellSec
             erSecondHalfN++
         }
-        val ratio = if (erSecondHalfN > 0 && erSecondHalfSum > 0.1)
+        val ratio = clip(if (erSecondHalfN > 0 && erSecondHalfSum > 0.1)
             (erFirstHalfSum / erFirstHalfN.coerceAtLeast(1)) / (erSecondHalfSum / erSecondHalfN)
-        else 1.0
+        else 1.0, 0.0, MAX_EARLY_LATE_RATIO)
         
         return WelfordResult(zScore, pctile, accel, trend, ratio)
     }
@@ -1771,9 +1798,13 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
         val firstInteractionLatency = listOf(likeLatencyMs, commentLatencyMs, shareLatencyMs, saveLatencyMs)
             .filter { it > 0L }
             .minOrNull() ?: -1L
-        val interactionDwellRatio = if (firstInteractionLatency > 0 && dwell.ms > 0) firstInteractionLatency.toFloat() / dwell.ms.toFloat() else 0f
+        val interactionDwellRatio = clip(
+            if (firstInteractionLatency > 0 && dwell.ms > 0) firstInteractionLatency.toFloat() / dwell.ms.toFloat() else 0f,
+            0f,
+            1f
+        )
         val swipeCompletionRatio = if (swipeAttempts > 0) cleanSwipes.toFloat() / swipeAttempts.toFloat() else 1.0f
-        val interactionRate = halfSessionInteractions.size.toFloat() / wDwellN.coerceAtLeast(1)
+        val interactionRate = clip(halfSessionInteractions.size.toFloat() / wDwellN.coerceAtLeast(1), 0f, 1f)
 
         if (halfSessionInteractions.isNotEmpty()) {
             val lastInteraction = halfSessionInteractions.last().toDouble()
@@ -1783,14 +1814,14 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
             val iDelta2 = lastInteraction - wInteractionMean
             wInteractionM2 += iDelta * iDelta2
         }
-        val burstiness = if (wInteractionN > 1) wInteractionM2 / wInteractionN else 0.0
+        val burstiness = clip(if (wInteractionN > 1) wInteractionM2 / wInteractionN else 0.0, 0.0, MAX_INTERACTION_BURSTINESS)
 
-        val dropoff = if (halfSessionInteractions.isNotEmpty()) {
+        val dropoff = clip(if (halfSessionInteractions.isNotEmpty()) {
             val threshold = wDwellN / 2
             val early = halfSessionInteractions.count { it < threshold }
             val late = halfSessionInteractions.count { it >= threshold }
             if (early > 0) late.toFloat() / early.toFloat() else 1f
-        } else 0f
+        } else 0f, 0f, MAX_INTERACTION_DROPOFF.toFloat())
         
         return InteractionResult(interactionDwellRatio, swipeCompletionRatio, interactionRate, burstiness, dropoff)
     }
@@ -1804,20 +1835,23 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
             val sDelta2 = lastInterval - wScrollMean
             wScrollM2 += sDelta * sDelta2
         }
-        val cv = if (wScrollN > 1 && wScrollMean > 0)
-            sqrt(wScrollM2 / wScrollN) / wScrollMean else 0.0
+        val cv = clip(
+            if (wScrollN > 1 && wScrollMean > 0) sqrt(wScrollM2 / wScrollN) / wScrollMean else 0.0,
+            0.0,
+            MAX_SCROLL_CV
+        )
 
         if (sessionScrollIntervals.isNotEmpty()) {
             val bin = sessionScrollIntervals.last() / 200L
             scrollBins[bin] = (scrollBins[bin] ?: 0) + 1
         }
-        val entropy = if (scrollBins.isNotEmpty()) {
+        val entropy = clip(if (scrollBins.isNotEmpty()) {
             val totalE = scrollBins.values.sum().toDouble()
             -scrollBins.values.sumOf { c ->
                 val pE = c / totalE
                 if (pE > 0) pE * kotlin.math.log2(pE) else 0.0
             }
-        } else 0.0
+        } else 0.0, 0.0, MAX_SCROLL_ENTROPY)
 
         if (sessionScrollIntervals.size > 50) sessionScrollIntervals.removeAt(0)
         
@@ -1839,10 +1873,14 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
         val maxSpeed = if (scrollSnap.isNotEmpty()) scrollSnap.maxOrNull()?.toDouble() ?: 0.0 else 0.0
 
         val accelSnap = ArrayList(accelMagnitudes)
-        val accVar = calculateVariance(accelSnap).toDouble()
+        val accVar = clip(calculateVariance(accelSnap).toDouble(), 0.0, MAX_ACCEL_VARIANCE)
         val isStationary = if (accVar < 0.2 && accelSnap.isNotEmpty()) 1 else 0
 
-        val luxDelta = if (ambientLuxStart != -1f && ambientLuxEnd != -1f) ambientLuxEnd - ambientLuxStart else 0f
+        val luxDelta = clip(
+            if (ambientLuxStart != -1f && ambientLuxEnd != -1f) ambientLuxEnd - ambientLuxStart else 0f,
+            -MAX_LUX_DELTA,
+            MAX_LUX_DELTA
+        )
         val batteryDelta = if (batteryLevelStart != -1 && batteryLevelEnd != -1) batteryLevelStart - batteryLevelEnd else 0
         
         return EnvironmentResult(rollingMean, rollingStd, avgSpeed, maxSpeed, accVar, isStationary, luxDelta, batteryDelta)
@@ -1862,7 +1900,7 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
         val sleepStart = prefs.getInt("sleep_start_hour", 23)
         val sleepEnd = prefs.getInt("sleep_end_hour", 7)
 
-        val line = listOf(
+        val values = listOf(
             currentSessionNumber, reelCount, formStart, formEnd,
             String.format("%.2f", dwell.sec), getTimePeriod(),
             String.format("%.2f", eStats.avgSpeed), String.format("%.2f", eStats.maxSpeed),
@@ -1891,23 +1929,23 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
             uniqueAudioTracks.size, 0, 0f,
             String.format("%.4f", circadianPhase), String.format("%.2f", sleepProxyScore), String.format("%.1f", estimatedSleepDurationH), String.format("%.2f", consistencyScore), if (isWeekend) 1 else 0,
             0,
-            currentIntention,
+            csvSafe(currentIntention),
             0,
             0,
             currentMoodBefore,
             0,
             0,
             sleepStart, sleepEnd,
-            prefs.getString("previous_context", "unknown") ?: "unknown",
+            csvSafe(prefs.getString("previous_context", "unknown") ?: "unknown"),
             0,
             0,
             prefs.getInt("morning_rest_score", 0)
-        ).joinToString(",")
-        
-        val fields = line.split(",")
-        if (fields.size != EXPECTED_CSV_COLUMNS) {
-            throw IllegalStateException("CSV column count mismatch: expected $EXPECTED_CSV_COLUMNS, got ${fields.size}")
+        )
+
+        if (values.size != EXPECTED_CSV_COLUMNS) {
+            throw IllegalStateException("CSV column count mismatch: expected $EXPECTED_CSV_COLUMNS, got ${values.size}")
         }
+        val line = values.joinToString(",")
         return line
     }
 
@@ -1946,13 +1984,92 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
         nm.notify(currentSessionNumber + 1000, builder.build())
     }
 
+    override fun onCreate() {
+        super.onCreate()
+        if (!crashHandlerInstalled) {
+            crashHandlerInstalled = true
+            val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
+            Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+                try {
+                    val stackTrace = StringWriter().use { writer ->
+                        throwable.printStackTrace(PrintWriter(writer))
+                        writer.toString()
+                    }
+                    Log.e(
+                        "InstaTracker",
+                        "Uncaught crash on thread=${thread.name} session=$currentSessionNumber reel=$reelCount idx=${currentReelIndex ?: -1}",
+                        throwable
+                    )
+                    File(filesDir, "last_service_crash.txt").writeText(
+                        buildString {
+                            appendLine("time=${System.currentTimeMillis()}")
+                            appendLine("thread=${thread.name}")
+                            appendLine("session=$currentSessionNumber")
+                            appendLine("reel=$reelCount")
+                            appendLine("idx=${currentReelIndex ?: -1}")
+                            appendLine(stackTrace)
+                        }
+                    )
+                } catch (_: Throwable) {
+                    // Best effort only.
+                } finally {
+                    previousHandler?.uncaughtException(thread, throwable)
+                }
+            }
+        }
+    }
+
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(CHANNEL_ID, "Survey Requests", NotificationManager.IMPORTANCE_HIGH).apply {
                 description = "Post-session micro probes"
             }
-            (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).createNotificationChannel(channel)
+            val keepAliveChannel = NotificationChannel(
+                KEEPALIVE_CHANNEL_ID,
+                "Reelio Background Tracking",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Keeps Reelio tracking service alive on aggressive OEM power managers"
+                setShowBadge(false)
+                enableVibration(false)
+                setSound(null, null)
+            }
+            (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).apply {
+                createNotificationChannel(channel)
+                createNotificationChannel(keepAliveChannel)
+            }
         }
+    }
+
+    private fun startForegroundKeepAliveIfNeeded() {
+        if (!shouldUseForegroundKeepAlive()) return
+
+        try {
+            val notification = buildPersistentNotification()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    KEEPALIVE_NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                )
+            } else {
+                startForeground(KEEPALIVE_NOTIFICATION_ID, notification)
+            }
+            Log.i("ReelioDiag", "Foreground keepalive enabled for accessibility service")
+        } catch (t: Throwable) {
+            Log.e("InstaTracker", "Failed to start foreground keepalive", t)
+        }
+    }
+
+    private fun shouldUseForegroundKeepAlive(): Boolean {
+        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val key = "enable_accessibility_foreground_keepalive"
+        if (prefs.contains(key)) {
+            return prefs.getBoolean(key, false)
+        }
+
+        val manufacturer = Build.MANUFACTURER?.lowercase(Locale.US) ?: ""
+        return manufacturer.contains("vivo") || manufacturer.contains("iqoo") || manufacturer.contains("bbk")
     }
 
     private fun getTimePeriod(): String {
@@ -2018,13 +2135,170 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
         }
     }
 
+    private fun finalizeProfileVisit(now: Long) {
+        if (profileVisitStartMs <= 0L || now <= profileVisitStartMs) return
+        profileVisitDurationS += (now - profileVisitStartMs) / 1000f
+        profileVisitStartMs = 0L
+    }
+
+    private fun computeConsistencyScore(firstSessionTimes: List<Int>): Float {
+        if (firstSessionTimes.size <= 1) return 1.0f
+        val mean = firstSessionTimes.average()
+        val variance = firstSessionTimes.map { (it - mean) * (it - mean) }.average()
+        val stdMinutes = sqrt(variance)
+        return (1.0 - (stdMinutes / 180.0)).coerceIn(0.0, 1.0).toFloat()
+    }
+
+    private fun estimateSleepDurationHours(lastSessionEnd: Long, now: Long, sleepStartHour: Int, sleepEndHour: Int): Float {
+        if (lastSessionEnd <= 0L || now <= lastSessionEnd) return 0f
+
+        val gapMs = now - lastSessionEnd
+        if (gapMs < TimeUnit.HOURS.toMillis(2)) return 0f
+        if (gapMs > TimeUnit.HOURS.toMillis(18)) return 0f
+
+        return computeSleepWindowOverlapHours(lastSessionEnd, now, sleepStartHour, sleepEndHour)
+            .coerceIn(0.0, 14.0)
+            .toFloat()
+    }
+
+    private fun computeSleepWindowOverlapHours(startMs: Long, endMs: Long, sleepStartHour: Int, sleepEndHour: Int): Double {
+        if (endMs <= startMs) return 0.0
+
+        val cursor = Calendar.getInstance().apply {
+            timeInMillis = startMs
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+        val lastDay = Calendar.getInstance().apply {
+            timeInMillis = endMs
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }.timeInMillis
+
+        var overlapMs = 0L
+        while (cursor.timeInMillis <= lastDay + TimeUnit.DAYS.toMillis(1)) {
+            val windowStart = cursor.timeInMillis + TimeUnit.HOURS.toMillis(sleepStartHour.toLong())
+            val windowEnd = if (sleepEndHour > sleepStartHour) {
+                cursor.timeInMillis + TimeUnit.HOURS.toMillis(sleepEndHour.toLong())
+            } else {
+                cursor.timeInMillis + TimeUnit.DAYS.toMillis(1) + TimeUnit.HOURS.toMillis(sleepEndHour.toLong())
+            }
+
+            val overlapStart = max(startMs, windowStart)
+            val overlapEnd = kotlin.math.min(endMs, windowEnd)
+            if (overlapEnd > overlapStart) {
+                overlapMs += overlapEnd - overlapStart
+            }
+            cursor.add(Calendar.DAY_OF_YEAR, 1)
+        }
+
+        return overlapMs / 3_600_000.0
+    }
+
+    private fun captureAppContextSnapshot(now: Long): AppContextSnapshot {
+        return try {
+            val usageStatsManager = getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager
+                ?: return AppContextSnapshot("unknown", "unknown", 0f, false, false, 0, 0L)
+
+            val lookbackStart = now - TimeUnit.HOURS.toMillis(2)
+            val usageEvents = usageStatsManager.queryEvents(lookbackStart, now)
+            val event = UsageEvents.Event()
+            val screenWindowStart = now - TimeUnit.HOURS.toMillis(1)
+
+            var previousPackage = "unknown"
+            var previousPackageTs = 0L
+            var latestInstagramForegroundTs = 0L
+            var screenInteractiveStart = 0L
+            var screenOnCount = 0
+            var screenOnDurationMs = 0L
+
+            while (usageEvents.hasNextEvent()) {
+                usageEvents.getNextEvent(event)
+                when (event.eventType) {
+                    UsageEvents.Event.ACTIVITY_RESUMED,
+                    UsageEvents.Event.MOVE_TO_FOREGROUND -> {
+                        val pkg = event.packageName ?: continue
+                        if (pkg == "com.instagram.android") {
+                            latestInstagramForegroundTs = event.timeStamp
+                        } else {
+                            previousPackage = pkg
+                            previousPackageTs = event.timeStamp
+                        }
+                    }
+                    UsageEvents.Event.SCREEN_INTERACTIVE -> {
+                        if (event.timeStamp >= screenWindowStart) {
+                            screenOnCount++
+                            screenInteractiveStart = event.timeStamp
+                        }
+                    }
+                    UsageEvents.Event.SCREEN_NON_INTERACTIVE -> {
+                        if (screenInteractiveStart > 0L) {
+                            val boundedStart = max(screenInteractiveStart, screenWindowStart)
+                            if (event.timeStamp > boundedStart) {
+                                screenOnDurationMs += event.timeStamp - boundedStart
+                            }
+                            screenInteractiveStart = 0L
+                        }
+                    }
+                }
+            }
+
+            val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
+            if (screenInteractiveStart > 0L && powerManager?.isInteractive == true) {
+                val boundedStart = max(screenInteractiveStart, screenWindowStart)
+                screenOnDurationMs += now - boundedStart
+            }
+
+            val previousCategory = classifyPackage(previousPackage)
+            val previousDurationS = if (latestInstagramForegroundTs > 0L && previousPackageTs > 0L &&
+                latestInstagramForegroundTs >= previousPackageTs) {
+                ((latestInstagramForegroundTs - previousPackageTs) / 1000f).coerceAtMost(7200f)
+            } else 0f
+
+            AppContextSnapshot(
+                previousPackage = previousPackage,
+                previousCategory = previousCategory,
+                previousAppDurationS = previousDurationS,
+                directLaunch = previousCategory == "launcher",
+                sessionTriggeredByNotif = previousCategory == "system_ui",
+                screenOnCount1hr = screenOnCount,
+                screenOnDuration1hr = screenOnDurationMs / 1000L
+            )
+        } catch (t: Throwable) {
+            Log.w("InstaTracker", "captureAppContextSnapshot failed: ${t.message}")
+            AppContextSnapshot("unknown", "unknown", 0f, false, false, 0, 0L)
+        }
+    }
+
+    private fun classifyPackage(pkg: String): String {
+        val normalized = pkg.lowercase(Locale.US)
+        return when {
+            normalized.isBlank() || normalized == "unknown" -> "unknown"
+            normalized == packageName.lowercase(Locale.US) -> "self"
+            normalized.contains("launcher") || normalized.contains("quickstep") -> "launcher"
+            normalized.contains("systemui") -> "system_ui"
+            normalized.contains("instagram") -> "social"
+            normalized.contains("youtube") || normalized.contains("netflix") || normalized.contains("spotify") -> "media"
+            normalized.contains("chrome") || normalized.contains("browser") || normalized.contains("firefox") -> "browser"
+            normalized.contains("whatsapp") || normalized.contains("telegram") || normalized.contains("messaging") || normalized.contains("message") -> "messaging"
+            normalized.contains("gmail") || normalized.contains("outlook") || normalized.contains("mail") -> "email"
+            normalized.contains("docs") || normalized.contains("sheet") || normalized.contains("slack") || normalized.contains("teams") || normalized.contains("office") -> "productivity"
+            normalized.contains("camera") -> "camera"
+            else -> "other"
+        }
+    }
+
     override fun onInterrupt() {}
 
     private fun buildPersistentNotification(): Notification {
-        return NotificationCompat.Builder(this, CHANNEL_ID)
+        return NotificationCompat.Builder(this, KEEPALIVE_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_aware_notification)
             .setContentTitle("Reelio is tracking")
-            .setContentText("Monitoring Instagram sessions")
+            .setContentText("Keeping accessibility tracking active")
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setSilent(true)
             .setOngoing(true)

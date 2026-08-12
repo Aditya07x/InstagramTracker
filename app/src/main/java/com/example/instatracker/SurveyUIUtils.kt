@@ -2,11 +2,14 @@ package com.example.instatracker
 
 import android.animation.ValueAnimator
 import android.content.Context
+import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.view.MotionEvent
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
@@ -35,6 +38,12 @@ object SurveyUIUtils {
     private const val TRACK = "#D4CCBF"
     private const val BADGE_BG = "#4A2580"
     private const val BADGE_TEXT = "#F3EFFA"
+
+    data class KnobOption(
+        val label: String,
+        val accentColor: String,
+        val emoji: String = ""
+    )
 
     private fun c(hex: String) = Color.parseColor(hex)
 
@@ -337,6 +346,415 @@ object SurveyUIUtils {
             lp.bottomMargin = dp(context, 18f)
             layoutParams = lp
         }
+    }
+
+    fun createChoiceKnob(
+        context: Context,
+        options: List<KnobOption>,
+        hint: String = "tap the dial",
+        onSelect: (Int) -> Unit
+    ): LinearLayout {
+        val useSemiCircle = options.size >= 5
+        val knobWidth = dp(context, if (useSemiCircle) 298f else 254f)
+        val knobHeight = dp(context, if (useSemiCircle) 224f else 272f)
+        val trackThickness = dpF(context, if (useSemiCircle) 30f else 26f)
+
+        val wrapper = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = dp(context, 12f)
+            }
+            alpha = 0f
+            translationY = dpF(context, 20f)
+        }
+
+        val floatingLabel = TextView(context).apply {
+            text = hint
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            setTextColor(c(TEXT))
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            gravity = Gravity.CENTER
+            letterSpacing = -0.01f
+            setPadding(dp(context, 16f), dp(context, 11f), dp(context, 16f), dp(context, 11f))
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dpF(context, 999f)
+                setColor(c(SURFACE))
+                setStroke(1, mix(c(BORDER), Color.WHITE, 0.35f))
+            }
+            alpha = 0.92f
+            scaleX = 0.96f
+            scaleY = 0.96f
+            elevation = dpF(context, 10f)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = dp(context, 14f)
+            }
+        }
+        wrapper.addView(floatingLabel)
+
+        wrapper.addView(TextView(context).apply {
+            text = if (useSemiCircle) "slide your finger across the dial" else "drag or tap the dial"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
+            setTextColor(c(TEXT_FAINT))
+            gravity = Gravity.CENTER
+            letterSpacing = 0.04f
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = dp(context, 12f)
+            }
+        })
+
+        val knobView = object : View(context) {
+            private val segmentPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                style = Paint.Style.STROKE
+                strokeWidth = trackThickness
+                strokeCap = Paint.Cap.ROUND
+            }
+            private val segmentGlowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                style = Paint.Style.STROKE
+                strokeWidth = trackThickness + dpF(context, 10f)
+                strokeCap = Paint.Cap.ROUND
+            }
+            private val inactivePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                style = Paint.Style.STROKE
+                strokeWidth = trackThickness + dpF(context, 2f)
+                color = mix(c(TRACK), c(SURFACE), 0.32f)
+                strokeCap = Paint.Cap.ROUND
+            }
+            private val bezelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                style = Paint.Style.STROKE
+                strokeWidth = dpF(context, 1.2f)
+                color = mix(c(BORDER), Color.WHITE, 0.18f)
+            }
+            private val innerTrackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                style = Paint.Style.STROKE
+                strokeWidth = dpF(context, 10f)
+                color = mix(c(SURFACE), c(BG), 0.5f)
+                strokeCap = Paint.Cap.ROUND
+            }
+            private val tickPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                style = Paint.Style.STROKE
+                strokeWidth = dpF(context, 2f)
+                color = mix(c(SURFACE), Color.WHITE, 0.65f)
+                strokeCap = Paint.Cap.ROUND
+            }
+            private val knobFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                style = Paint.Style.FILL
+                color = mix(c(SURFACE), Color.WHITE, 0.2f)
+            }
+            private val knobInnerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                style = Paint.Style.FILL
+                color = mix(c(BG), c(SURFACE), 0.55f)
+            }
+            private val knobStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                style = Paint.Style.STROKE
+                strokeWidth = dpF(context, 1.4f)
+                color = mix(c(BORDER), Color.WHITE, 0.18f)
+            }
+            private val pointerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                style = Paint.Style.FILL
+                color = c(TEXT)
+            }
+            private val pointerAccentPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                style = Paint.Style.FILL
+            }
+            private val hubRingPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                style = Paint.Style.STROKE
+                strokeWidth = dpF(context, 4f)
+                color = mix(c(BORDER), c(TEXT), 0.14f)
+            }
+            private val hubDotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                style = Paint.Style.FILL
+                color = c(TEXT)
+            }
+            private val centerLabelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = c(TEXT)
+                textAlign = Paint.Align.CENTER
+                textSize = dpF(context, 12f)
+                typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            }
+            private val centerHintPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = c(TEXT_DIM)
+                textAlign = Paint.Align.CENTER
+                textSize = dpF(context, 10f)
+                typeface = Typeface.create("sans-serif", Typeface.NORMAL)
+            }
+
+            private val sweep = if (useSemiCircle) 208f else 300f
+            private val startAngle = if (useSemiCircle) 166f else 120f
+            private val gapAngle = if (useSemiCircle) 5f else 7f
+            private var selectedIndex = -1
+            private var highlightedIndex = -1
+            private var hasDragged = false
+
+            init {
+                setLayerType(View.LAYER_TYPE_SOFTWARE, null)
+            }
+
+            private fun setActiveLabel(index: Int, immediate: Boolean = false) {
+                if (index !in options.indices) {
+                    if (immediate) {
+                        floatingLabel.text = hint
+                        floatingLabel.alpha = 0.92f
+                        floatingLabel.scaleX = 0.96f
+                        floatingLabel.scaleY = 0.96f
+                    } else {
+                        floatingLabel.animate().cancel()
+                        floatingLabel.animate()
+                            .alpha(0.92f)
+                            .scaleX(0.96f)
+                            .scaleY(0.96f)
+                            .setDuration(140)
+                            .start()
+                        floatingLabel.text = hint
+                    }
+                    return
+                }
+
+                floatingLabel.text = options[index].label
+                floatingLabel.background = GradientDrawable().apply {
+                    shape = GradientDrawable.RECTANGLE
+                    cornerRadius = dpF(context, 999f)
+                    setColor(pastel(c(options[index].accentColor.take(7))))
+                    setStroke(1, mix(c(options[index].accentColor.take(7)), Color.WHITE, 0.25f))
+                }
+                if (immediate) {
+                    floatingLabel.alpha = 1f
+                    floatingLabel.scaleX = 1f
+                    floatingLabel.scaleY = 1f
+                    return
+                }
+                floatingLabel.animate().cancel()
+                floatingLabel.scaleX = 0.94f
+                floatingLabel.scaleY = 0.94f
+                floatingLabel.animate()
+                    .alpha(1f)
+                    .scaleX(1f)
+                    .scaleY(1f)
+                    .setDuration(170)
+                    .setInterpolator(AccelerateDecelerateInterpolator())
+                    .start()
+            }
+
+            private fun radiusValues(): Triple<Float, Float, Float> {
+                val cx = width / 2f
+                val cy = if (useSemiCircle) height * 0.82f else height / 2f
+                val radiusBase = minOf(width.toFloat(), height.toFloat() * if (useSemiCircle) 1.45f else 1f)
+                val radius = radiusBase / 2f - trackThickness
+                return Triple(cx, cy, radius)
+            }
+
+            private fun angleToIndex(angle: Float): Int {
+                val relativeAngle = ((angle - startAngle) + 360f) % 360f
+                if (relativeAngle > sweep) return -1
+                val segmentSweep = (sweep - gapAngle * (options.size - 1).toFloat()) / options.size.toFloat()
+                val slotSize = segmentSweep + gapAngle
+                val candidate = (relativeAngle / slotSize).toInt().coerceIn(0, options.lastIndex)
+                return if ((relativeAngle % slotSize) > segmentSweep) -1 else candidate
+            }
+
+            private fun updateHighlight(index: Int, fromUser: Boolean = false) {
+                if (index == highlightedIndex) return
+                highlightedIndex = index
+                if (index >= 0) {
+                    setActiveLabel(index)
+                    if (fromUser) {
+                        performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                    }
+                } else {
+                    setActiveLabel(selectedIndex)
+                }
+                invalidate()
+            }
+
+            override fun onDraw(canvas: Canvas) {
+                super.onDraw(canvas)
+                val (cx, cy, radius) = radiusValues()
+                val rect = RectF(cx - radius, cy - radius, cx + radius, cy + radius)
+                val segmentSweep = (sweep - gapAngle * (options.size - 1).toFloat()) / options.size.toFloat()
+
+                canvas.drawArc(rect, startAngle, sweep, false, inactivePaint)
+                canvas.drawArc(rect, startAngle, sweep, false, bezelPaint)
+
+                val innerTrackRect = RectF(
+                    cx - (radius - trackThickness * 0.62f),
+                    cy - (radius - trackThickness * 0.62f),
+                    cx + (radius - trackThickness * 0.62f),
+                    cy + (radius - trackThickness * 0.62f)
+                )
+                canvas.drawArc(innerTrackRect, startAngle, sweep, false, innerTrackPaint)
+
+                options.forEachIndexed { index, option ->
+                    val accent = c(option.accentColor.take(7))
+                    val isActive = index == if (highlightedIndex >= 0) highlightedIndex else selectedIndex
+                    if (isActive) {
+                        segmentGlowPaint.color = tint(accent, 58)
+                        segmentGlowPaint.setShadowLayer(dpF(context, 12f), 0f, 0f, tint(accent, 46))
+                    }
+                    segmentPaint.color = if (isActive) {
+                        mix(accent, Color.WHITE, 0.06f)
+                    } else {
+                        pastelStrong(accent)
+                    }
+                    val segStart = startAngle + index.toFloat() * (segmentSweep + gapAngle)
+                    if (isActive) {
+                        canvas.drawArc(rect, segStart, segmentSweep, false, segmentGlowPaint)
+                    }
+                    canvas.drawArc(rect, segStart, segmentSweep, false, segmentPaint)
+
+                    val tickAngle = Math.toRadians((segStart + segmentSweep / 2f).toDouble())
+                    val inner = radius - trackThickness * 0.34f
+                    val outer = radius + trackThickness * 0.14f
+                    val sx = cx + kotlin.math.cos(tickAngle).toFloat() * inner
+                    val sy = cy + kotlin.math.sin(tickAngle).toFloat() * inner
+                    val ex = cx + kotlin.math.cos(tickAngle).toFloat() * outer
+                    val ey = cy + kotlin.math.sin(tickAngle).toFloat() * outer
+                    canvas.drawLine(sx, sy, ex, ey, tickPaint)
+                }
+
+                val knobRadius = if (useSemiCircle) radius - trackThickness * 0.92f else radius - trackThickness * 1.02f
+                canvas.drawCircle(cx, cy, knobRadius, knobFillPaint)
+                canvas.drawCircle(cx, cy, knobRadius * 0.78f, knobInnerPaint)
+                canvas.drawCircle(cx, cy, knobRadius, knobStrokePaint)
+
+                val activeIndex = if (highlightedIndex >= 0) highlightedIndex else selectedIndex
+                val pointerAngle = if (activeIndex >= 0) {
+                    startAngle + activeIndex.toFloat() * (segmentSweep + gapAngle) + segmentSweep / 2f
+                } else {
+                    startAngle + sweep / 2f
+                }
+                val pointerRad = Math.toRadians(pointerAngle.toDouble())
+                val pointerLen = knobRadius * 0.84f
+                val pointerBase = knobRadius * 0.16f
+                val shaftStart = knobRadius * 0.24f
+                val headLen = knobRadius * 0.22f
+                val shaftEnd = pointerLen - headLen
+                val sx = cx + kotlin.math.cos(pointerRad).toFloat() * shaftStart
+                val sy = cy + kotlin.math.sin(pointerRad).toFloat() * shaftStart
+                val ex = cx + kotlin.math.cos(pointerRad).toFloat() * shaftEnd
+                val ey = cy + kotlin.math.sin(pointerRad).toFloat() * shaftEnd
+                val perp = pointerRad + Math.PI / 2
+                val offsetX = kotlin.math.cos(perp).toFloat() * pointerBase
+                val offsetY = kotlin.math.sin(perp).toFloat() * pointerBase
+                val tipX = cx + kotlin.math.cos(pointerRad).toFloat() * pointerLen
+                val tipY = cy + kotlin.math.sin(pointerRad).toFloat() * pointerLen
+                val accent = if (activeIndex >= 0) c(options[activeIndex].accentColor.take(7)) else c(PRIMARY)
+                pointerAccentPaint.color = mix(accent, Color.WHITE, 0.12f)
+
+                val shaftPath = Path().apply {
+                    moveTo(sx + offsetX, sy + offsetY)
+                    lineTo(ex + offsetX * 0.58f, ey + offsetY * 0.58f)
+                    lineTo(ex - offsetX * 0.58f, ey - offsetY * 0.58f)
+                    lineTo(sx - offsetX, sy - offsetY)
+                    close()
+                }
+                val headPath = Path().apply {
+                    moveTo(tipX, tipY)
+                    lineTo(ex + offsetX * 1.22f, ey + offsetY * 1.22f)
+                    lineTo(ex - offsetX * 1.22f, ey - offsetY * 1.22f)
+                    close()
+                }
+                canvas.drawPath(shaftPath, pointerPaint)
+                canvas.drawPath(headPath, pointerAccentPaint)
+                canvas.drawCircle(cx, cy, knobRadius * 0.17f, knobFillPaint)
+                canvas.drawCircle(cx, cy, knobRadius * 0.17f, hubRingPaint)
+                canvas.drawCircle(cx, cy, knobRadius * 0.07f, hubDotPaint)
+
+                val centerLabel = if (activeIndex >= 0) "Release to choose" else "Slide to choose"
+                canvas.drawText(centerLabel, cx, cy + dpF(context, 6f), centerLabelPaint)
+                canvas.drawText(hint, cx, cy + dpF(context, 25f), centerHintPaint)
+            }
+
+            override fun onTouchEvent(event: MotionEvent): Boolean {
+                val (cx, cy, radius) = radiusValues()
+                val dx = event.x - cx
+                val dy = event.y - cy
+                val touchRadius = kotlin.math.sqrt(dx * dx + dy * dy)
+                val minRadius = radius - trackThickness * 1.3f
+                val maxRadius = radius + trackThickness * 0.9f
+                if ((event.action == MotionEvent.ACTION_DOWN || hasDragged) && touchRadius !in minRadius..maxRadius) {
+                    if (event.action == MotionEvent.ACTION_UP || event.action == MotionEvent.ACTION_CANCEL) {
+                        updateHighlight(-1)
+                        hasDragged = false
+                    }
+                    return true
+                }
+
+                var angle = Math.toDegrees(kotlin.math.atan2(dy.toDouble(), dx.toDouble())).toFloat()
+                if (angle < 0f) angle += 360f
+                val currentIndex = angleToIndex(angle)
+
+                when (event.action) {
+                    MotionEvent.ACTION_DOWN -> {
+                        parent?.requestDisallowInterceptTouchEvent(true)
+                        hasDragged = true
+                        updateHighlight(currentIndex, fromUser = currentIndex >= 0)
+                        animate().cancel()
+                        animate()
+                            .scaleX(0.992f)
+                            .scaleY(0.992f)
+                            .setDuration(80)
+                            .start()
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        hasDragged = true
+                        updateHighlight(currentIndex, fromUser = currentIndex >= 0)
+                    }
+                    MotionEvent.ACTION_UP -> {
+                        parent?.requestDisallowInterceptTouchEvent(false)
+                        animate().cancel()
+                        animate()
+                            .scaleX(1f)
+                            .scaleY(1f)
+                            .setDuration(120)
+                            .setInterpolator(AccelerateDecelerateInterpolator())
+                            .start()
+                        hasDragged = false
+                        if (currentIndex >= 0) {
+                            selectedIndex = currentIndex
+                            highlightedIndex = currentIndex
+                            setActiveLabel(currentIndex, immediate = true)
+                            performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                            invalidate()
+                            postDelayed({ onSelect(currentIndex) }, 90)
+                        } else {
+                            updateHighlight(-1)
+                        }
+                    }
+                    MotionEvent.ACTION_CANCEL -> {
+                        parent?.requestDisallowInterceptTouchEvent(false)
+                        hasDragged = false
+                        updateHighlight(-1)
+                        animate().cancel()
+                        animate().scaleX(1f).scaleY(1f).setDuration(120).start()
+                    }
+                }
+                return true
+            }
+        }.apply {
+            layoutParams = LinearLayout.LayoutParams(knobWidth, knobHeight).apply {
+                gravity = Gravity.CENTER_HORIZONTAL
+            }
+        }
+        wrapper.addView(knobView)
+        wrapper.post {
+            wrapper.animate()
+                .alpha(1f)
+                .translationY(0f)
+                .setDuration(220)
+                .setInterpolator(DecelerateInterpolator())
+                .start()
+        }
+        return wrapper
     }
 
     fun createDivider(context: Context): View {

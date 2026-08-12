@@ -20,9 +20,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import android.util.Base64
-import org.json.JSONArray
-import org.json.JSONObject
 
 class DashboardActivity : ComponentActivity() {
 
@@ -99,71 +96,6 @@ class DashboardActivity : ComponentActivity() {
         if (::webView.isInitialized) {
             // Re-inject HMM data (covers Settings changes + post-survey model updates)
             injectDataWithDebounce(webView)
-            // If RetroactiveSurveyActivity wrote a label while we were away, fire the JS callback
-            drainPendingRetroactiveLabel(webView)
-        }
-    }
-
-    /**
-     * Reads any pending retroactive label written by RetroactiveSurveyActivity and fires
-     * window.onRetroactiveLabelComplete(b64) in the WebView.
-     * The label payload is already Base64-encoded JSON — JS decodes with atob() + JSON.parse().
-     */
-    private fun drainPendingRetroactiveLabel(webView: WebView) {
-        val prefs = getSharedPreferences("InstaTrackerPrefs", Context.MODE_PRIVATE)
-        val b64   = prefs.getString("pending_retroactive_label_b64", null) ?: return
-        val ts    = prefs.getLong("pending_retroactive_label_ts", 0L)
-        // Ignore stale entries older than 5 minutes
-        if (System.currentTimeMillis() - ts > 5 * 60 * 1000L) {
-            prefs.edit().remove("pending_retroactive_label_b64").remove("pending_retroactive_label_ts").apply()
-            return
-        }
-        prefs.edit().remove("pending_retroactive_label_b64").remove("pending_retroactive_label_ts").apply()
-        handler.post {
-            webView.evaluateJavascript(
-                "if(typeof window.onRetroactiveLabelComplete==='function') window.onRetroactiveLabelComplete('$b64');",
-                null
-            )
-        }
-        android.util.Log.d("ReactDashboard", "Drained retroactive label callback to WebView")
-    }
-
-    private fun mergePendingRetroactiveLabelIntoPayload(jsonContent: String): String {
-        val prefs = getSharedPreferences("InstaTrackerPrefs", Context.MODE_PRIVATE)
-        val b64 = prefs.getString("pending_retroactive_label_b64", null) ?: return jsonContent
-        val ts = prefs.getLong("pending_retroactive_label_ts", 0L)
-        if (System.currentTimeMillis() - ts > 5 * 60 * 1000L) return jsonContent
-
-        return try {
-            val label = JSONObject(String(Base64.decode(b64, Base64.DEFAULT), Charsets.UTF_8))
-            val root = JSONObject(jsonContent)
-            val sessionNum = label.optString("sessionNum", "")
-            val sessionDate = label.optString("date", "")
-            var patched = false
-
-            fun patchSessions(arr: JSONArray?) {
-                if (arr == null) return
-                for (i in 0 until arr.length()) {
-                    val sess = arr.optJSONObject(i) ?: continue
-                    val matchesNum = sess.optString("sessionNum", "") == sessionNum
-                    val matchesDate = sess.optString("date", "") == sessionDate
-                    if (!matchesNum || !matchesDate) continue
-                    val keys = label.keys()
-                    while (keys.hasNext()) {
-                        val key = keys.next()
-                        sess.put(key, label.get(key))
-                    }
-                    patched = true
-                }
-            }
-
-            patchSessions(root.optJSONArray("sessions"))
-            patchSessions(root.optJSONArray("todaySessions"))
-
-            if (patched) root.toString() else jsonContent
-        } catch (e: Exception) {
-            android.util.Log.w("ReactDashboard", "Failed to merge pending retroactive label into payload: ${e.message}")
-            jsonContent
         }
     }
 
@@ -216,7 +148,7 @@ class DashboardActivity : ComponentActivity() {
                             return@execute
                         }
                     }
-                    val jsonContent = mergePendingRetroactiveLabelIntoPayload(jsonContentRaw)
+                    val jsonContent = jsonContentRaw
 
                     if (jsonContent.isBlank() || jsonContent == "{}" || jsonContent.contains("\"error\"")) {
                         handler.post {
@@ -482,35 +414,5 @@ class DashboardActivity : ComponentActivity() {
                 .apply()
         }
 
-        /**
-         * Launches RetroactiveSurveyActivity for a specific past session.
-         * Called from JS as: window.Android.openRetroactiveSurvey(sessionNum, date, predSummary, prefillJson)
-         * - sessionNum:    integer session number from hmm_results.json
-         * - date:          date string "YYYY-MM-DD" from hmm_results.json
-         * - predSummary:   human-readable model prediction string (shown as subtitle in Step 1)
-         * - prefillJson:   JSON string with existing non-zero label fields for context
-         */
-        @JavascriptInterface
-        fun openRetroactiveSurvey(sessionNumStr: String, date: String, predSummary: String, prefillJson: String) {
-            android.util.Log.d("ReactDashboard", "[Bridge] openRetroactiveSurvey called with: sessionNum=$sessionNumStr, date=$date")
-            val sessionNum = sessionNumStr.toIntOrNull()
-            if (sessionNum == null) {
-                android.util.Log.e("ReactDashboard", "[Bridge] Aborting: sessionNum '$sessionNumStr' is not a valid integer")
-                return
-            }
-            try {
-                val intent = android.content.Intent(mContext, RetroactiveSurveyActivity::class.java).apply {
-                    putExtra("session_num",         sessionNum)
-                    putExtra("session_date",        date)
-                    putExtra("prediction_summary",  predSummary)
-                    putExtra("prefill_json",         prefillJson)
-                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                mContext.startActivity(intent)
-                android.util.Log.d("ReactDashboard", "[Bridge] Activity launch triggered for session $sessionNum")
-            } catch (e: Exception) {
-                android.util.Log.e("ReactDashboard", "[Bridge] Failed to launch activity: ${e.message}", e)
-            }
-        }
     }
 }

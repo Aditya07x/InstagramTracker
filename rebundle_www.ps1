@@ -12,6 +12,7 @@ $npxArgs = @(
     'app/src/main/assets/www/app.jsx'
     '--bundle'
     '--format=iife'
+    '--target=es2018'
     '--outfile=app/src/main/assets/www/app.bundle.js'
     '--jsx-factory=React.createElement'
     '--jsx-fragment=React.Fragment'

@@ -78,34 +78,30 @@ class MicroProbeActivity : Activity() {
 
         layout.addView(SurveyUIUtils.createSystemLabel(this))
         layout.addView(SurveyUIUtils.createProgressRing(this, totalSteps = 3, currentStep = 1, accentColor = "#4A2580"))
-        layout.addView(SurveyUIUtils.createBadge(this, "POST-SESSION  \u00B7  REVIEW", "#4A2580"))
+        layout.addView(SurveyUIUtils.createBadge(this, "POST-SESSION  ·  REVIEW", "#4A2580"))
         layout.addView(SurveyUIUtils.createGradientTitle(this, "After closing Instagram, I feel...", "#4A2580"))
-        layout.addView(SurveyUIUtils.createSubtitle(this, "be honest \u2014 there are no wrong answers"))
+        layout.addView(SurveyUIUtils.createSubtitle(this, "be honest — there are no wrong answers"))
 
-        val cardStartIdx = layout.childCount
         val affectiveOptions = listOf(
-            Pair("Refreshed / entertained",       "#3A9E6F"),
-            Pair("About the same as before",      "#6B3FA0"),
-            Pair("A little drained",              "#C4973A"),
-            Pair("Regret I opened it",            "#C4563A"),
-            Pair("Worse than before I opened it", "#A03030")
+            SurveyUIUtils.KnobOption("Refreshed / entertained", "#3A9E6F"),
+            SurveyUIUtils.KnobOption("About the same as before", "#6B3FA0"),
+            SurveyUIUtils.KnobOption("A little drained", "#C4973A"),
+            SurveyUIUtils.KnobOption("Regret I opened it", "#C4563A"),
+            SurveyUIUtils.KnobOption("Worse than before I opened it", "#A03030")
         )
 
-        for ((index, pair) in affectiveOptions.withIndex()) {
-            val (label, color) = pair
-            layout.addView(
-                SurveyUIUtils.createOptionButton(this, label, accentColor = color) {
-                    postSessionRating = 5 - index  // Best=5, Worst=1
-                    // Derive moodAfter from affective rating for backward compat
-                    moodAfter = when {
-                        postSessionRating >= 4 -> 5
-                        postSessionRating == 3 -> 3
-                        else -> 1
-                    }
-                    showRegretPrompt()
+        layout.addView(
+            SurveyUIUtils.createChoiceKnob(this, affectiveOptions, hint = "one tap and we move on") { index ->
+                postSessionRating = 5 - index  // Best=5, Worst=1
+                // Derive moodAfter from affective rating for backward compat
+                moodAfter = when {
+                    postSessionRating >= 4 -> 5
+                    postSessionRating == 3 -> 3
+                    else -> 1
                 }
-            )
-        }
+                showRegretPrompt()
+            }
+        )
 
         layout.addView(SurveyUIUtils.createSkipButton(this) {
             postSessionRating = 0
@@ -116,7 +112,6 @@ class MicroProbeActivity : Activity() {
         scroll.addView(layout)
         setContentView(root)
 
-        layout.post { SurveyUIUtils.staggerCards(layout, cardStartIdx, affectiveOptions.size) }
     }
 
     // ── Step 2: Regret / Volition ─────────────────────────────────────────────
@@ -126,7 +121,7 @@ class MicroProbeActivity : Activity() {
 
         layout.addView(SurveyUIUtils.createSystemLabel(this))
         layout.addView(SurveyUIUtils.createProgressRing(this, totalSteps = 3, currentStep = 2, accentColor = "#4A2580"))
-        layout.addView(SurveyUIUtils.createBadge(this, "POST-SESSION  \u00B7  INTENT CHECK", "#4A2580"))
+        layout.addView(SurveyUIUtils.createBadge(this, "POST-SESSION  ·  INTENT CHECK", "#4A2580"))
         layout.addView(SurveyUIUtils.createGradientTitle(this, "Did this session go as intended?", "#4A2580"))
 
         val subtitle = when {
@@ -145,25 +140,22 @@ class MicroProbeActivity : Activity() {
         }
         layout.addView(SurveyUIUtils.createSubtitle(this, subtitle))
 
-        val cardStartIdx = layout.childCount
         val options = listOf(
-            Pair("Yes, it went as planned", "#3A9E6F"),
-            Pair("Somewhat",                "#C4973A"),
-            Pair("No, it went off track",   "#C4563A")
+            SurveyUIUtils.KnobOption("Yes, it went as planned", "#3A9E6F"),
+            SurveyUIUtils.KnobOption("Somewhat", "#C4973A"),
+            SurveyUIUtils.KnobOption("No, it went off track", "#C4563A")
         )
 
-        options.forEachIndexed { index, (label, color) ->
-            layout.addView(
-                SurveyUIUtils.createOptionButton(this, label, accentColor = color) {
-                    regretScore = when (index) {
-                        0 -> 1
-                        1 -> 3
-                        else -> 5
-                    }
-                    showComparativePrompt()
+        layout.addView(
+            SurveyUIUtils.createChoiceKnob(this, options, hint = "pick the closest match") { index ->
+                regretScore = when (index) {
+                    0 -> 1
+                    1 -> 3
+                    else -> 5
                 }
-            )
-        }
+                showComparativePrompt()
+            }
+        )
 
         layout.addView(SurveyUIUtils.createSkipButton(this) {
             regretScore = 0
@@ -173,7 +165,6 @@ class MicroProbeActivity : Activity() {
         scroll.addView(layout)
         setContentView(root)
 
-        layout.post { SurveyUIUtils.staggerCards(layout, cardStartIdx, options.size) }
     }
 
     // ── Step 3: Comparative Experience ────────────────────────────────────────
@@ -183,29 +174,26 @@ class MicroProbeActivity : Activity() {
 
         layout.addView(SurveyUIUtils.createSystemLabel(this))
         layout.addView(SurveyUIUtils.createProgressRing(this, totalSteps = 3, currentStep = 3, accentColor = "#4A2580"))
-        layout.addView(SurveyUIUtils.createBadge(this, "POST-SESSION  \u00B7  EXPERIENCE", "#4A2580"))
+        layout.addView(SurveyUIUtils.createBadge(this, "POST-SESSION  ·  EXPERIENCE", "#4A2580"))
         layout.addView(SurveyUIUtils.createGradientTitle(this, "This session was...", "#4A2580"))
         layout.addView(SurveyUIUtils.createSubtitle(this, "how did this session feel overall?"))
 
-        val cardStartIdx = layout.childCount
         val options = listOf(
-            Pair("Intentional \u2014 I got what I came for", "#3A9E6F"),
-            Pair("Okay, nothing special",                    "#6B3FA0"),
-            Pair("Longer than I wanted",                     "#C4973A"),
-            Pair("A waste of time",                          "#C4563A"),
-            Pair("I could not stop \u2014 it took over",     "#A03030")
+            SurveyUIUtils.KnobOption("Intentional — I got what I came for", "#3A9E6F"),
+            SurveyUIUtils.KnobOption("Okay, nothing special", "#6B3FA0"),
+            SurveyUIUtils.KnobOption("Longer than I wanted", "#C4973A"),
+            SurveyUIUtils.KnobOption("A waste of time", "#C4563A"),
+            SurveyUIUtils.KnobOption("I could not stop — it took over", "#A03030")
         )
 
-        options.forEachIndexed { index, (label, color) ->
-            layout.addView(
-                SurveyUIUtils.createOptionButton(this, label, accentColor = color) {
-                    // Keep comparative scale aligned with postSessionRating:
-                    // 5 = best session, 1 = worst session.
-                    comparativeRating = 5 - index
-                    finalizeProbe()
-                }
-            )
-        }
+        layout.addView(
+            SurveyUIUtils.createChoiceKnob(this, options, hint = "choose the closest overall feel") { index ->
+                // Keep comparative scale aligned with postSessionRating:
+                // 5 = best session, 1 = worst session.
+                comparativeRating = 5 - index
+                finalizeProbe()
+            }
+        )
 
         layout.addView(SurveyUIUtils.createSkipButton(this) {
             comparativeRating = 0
@@ -215,7 +203,6 @@ class MicroProbeActivity : Activity() {
         scroll.addView(layout)
         setContentView(root)
 
-        layout.post { SurveyUIUtils.staggerCards(layout, cardStartIdx, options.size) }
     }
 
     // ── Save + close ──────────────────────────────────────────────────────────
@@ -307,8 +294,9 @@ class MicroProbeActivity : Activity() {
                         pyDict.callAttr("__setitem__", "MoodBefore", moodBefore)
                         pyDict.callAttr("__setitem__", "MoodAfter", moodAfter)
                         pyDict.callAttr("__setitem__", "ComparativeRating", comparativeRating)
-                        pyDict.callAttr("__setitem__", "DelayedRegretScore",
-                            prefs.getInt("delayed_regret_score_${prefs.getInt("pending_survey_session_num", 0)}", 0))
+                        // Delayed regret survey feature was removed — column stays in the CSV
+                        // schema (avoids a schema migration) but is always 0 going forward.
+                        pyDict.callAttr("__setitem__", "DelayedRegretScore", 0)
                         pyDict.callAttr("__setitem__", "MorningRestScore", prefs.getInt("morning_rest_score", 0))
                         pyDict.callAttr("__setitem__", "PreviousContext",
                             prefs.getString("previous_context", "unknown") ?: "unknown")
@@ -381,7 +369,6 @@ class MicroProbeActivity : Activity() {
                 val moodBeforeIdx    = header.indexOf("MoodBefore")
                 val moodAfterIdx     = header.indexOf("MoodAfter")
                 val comparativeIdx   = header.indexOf("ComparativeRating")
-                val delayedRegretIdx = header.indexOf("DelayedRegretScore")
                 if (sessNumIdx < 0 || startTimeIdx < 0 || postRatingIdx < 0) return
 
                 val targetDatePrefix = (prefs.getString("pending_survey_session_date", "") ?: "").trim()
@@ -402,15 +389,17 @@ class MicroProbeActivity : Activity() {
                     if (moodBeforeIdx in 0 until fields.size && moodBefore > 0) fields[moodBeforeIdx] = moodBefore.toString()
                     if (moodAfterIdx in 0 until fields.size) fields[moodAfterIdx]  = moodAfter.toString()
                     if (comparativeIdx in 0 until fields.size) fields[comparativeIdx] = comparativeRating.toString()
-                    if (delayedRegretIdx in 0 until fields.size) {
-                        fields[delayedRegretIdx] = prefs.getInt("delayed_regret_score_${targetSessionNum.toIntOrNull() ?: 0}", 0).toString()
-                    }
                     lines[i] = fields.joinToString(",")
                     updated++
                 }
                 if (updated > 0) {
-                    csvFile.writeText(lines.joinToString("\n") + "\n")
-                    Log.d("ALSE", "Retroactive CSV update: $updated rows for session=$targetSessionNum")
+                    val tmpCsv = File(filesDir, "insta_data.csv.tmp")
+                    tmpCsv.writeText(lines.joinToString("\n") + "\n")
+                    if (tmpCsv.renameTo(csvFile)) {
+                        Log.d("ALSE", "Retroactive CSV update: Updated $updated rows. Atomic patch persisted.")
+                    } else {
+                        Log.e("ALSE", "Atomic CSV rename failed! Data not persisted.")
+                    }
                 }
             } catch (t: Throwable) {
                 Log.e("ALSE", "Retroactive CSV update failed: ${t.message}")

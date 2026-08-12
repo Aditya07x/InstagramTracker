@@ -105,45 +105,6 @@ function DashboardToday({ data }) {
     const timeline = safeArr(data.todaySessions);
     const [selectedTimelineIdx, setSelectedTimelineIdx] = useState(null);
     const [expandedFactors, setExpandedFactors] = useState({});
-    // Tracks in-place survey overrides after a retroactive label is submitted.
-    // Key = sessionNum (string), value = label field object.
-    const [retroactiveOverrides, setRetroactiveOverrides] = useState({});
-
-    useEffect(() => {
-        // Registered by DashboardActivity.drainPendingRetroactiveLabel() / MainActivity.
-        // The payload is a Base64-encoded JSON string from RetroactiveSurveyActivity.
-        window.onRetroactiveLabelComplete = (b64) => {
-            try {
-                const label = JSON.parse(atob(b64));
-                const key = String(label.sessionNum);
-                const date = String(label.date || "");
-                // Persist a window-scoped cache so that even if the native
-                // dashboard payload is briefly stale, the UI will continue to
-                // show the retroactive survey metrics instead of reverting.
-                try {
-                    const cacheKey = `${key}|${date}`;
-                    window.__retroactiveLabelCache = window.__retroactiveLabelCache || {};
-                    window.__retroactiveLabelCache[cacheKey] = {
-                        postSessionRating:  label.postSessionRating ?? 0,
-                        regretScore:        label.regretScore ?? 0,
-                        moodAfter:          label.moodAfter ?? 0,
-                        moodBefore:         label.moodBefore ?? 0,
-                        intendedAction:     label.intendedAction ?? "",
-                        comparativeRating:  label.comparativeRating ?? 0,
-                        delayedRegretScore: label.delayedRegretScore ?? 0,
-                        hasSurvey:          true,
-                        retroactiveLabel:   true,
-                    };
-                } catch (cacheErr) {
-                    console.warn('retroactive label cache update failed:', cacheErr);
-                }
-                setRetroactiveOverrides((prev) => ({ ...prev, [key]: label }));
-            } catch (e) {
-                console.error('onRetroactiveLabelComplete parse error:', e);
-            }
-        };
-        return () => { window.onRetroactiveLabelComplete = undefined; };
-    }, []);
 
     const circadian = safeArr(data.circadianProfile);
     const circData = circadian;
@@ -274,14 +235,11 @@ function DashboardToday({ data }) {
                             );
                         })()}
                         {selectedTimelineIdx !== null && timeline[selectedTimelineIdx] && (() => {
-                            const rawSel = timeline[selectedTimelineIdx];
-                            // Apply any retroactive label that was submitted this session
-                            const override = retroactiveOverrides[String(rawSel._sessionNum)] ?? null;
-                            const sel = override ? { ...rawSel, ...override } : rawSel;
+                            const sel = timeline[selectedTimelineIdx];
                             // Combine backend flag with the presence of at least one
                             // core survey metric. This prevents stale or legacy
                             // hasSurvey=true values (with all-zero fields) from
-                            // hiding the retroactive survey option.
+                            // showing an empty survey chip row.
                             const hasCoreSurveyMetric =
                                 (maybeNum(sel.postSessionRating) > 0) ||
                                 (maybeNum(sel.regretScore) > 0) ||
@@ -320,11 +278,6 @@ function DashboardToday({ data }) {
                                                     Intent: {sel.intendedAction}
                                                 </span>
                                             )}
-                                            {sel.retroactiveLabel && (
-                                                <span style={{ fontSize: 10, fontWeight: 700, padding: '3px 8px', borderRadius: 8, background: '#F0EBF8', color: '#6B3FA0', opacity: 0.75 }}>
-                                                    ✎ retroactive
-                                                </span>
-                                            )}
                                         </div>
                                     )}
                                     {!hasSurvey && (
@@ -347,87 +300,7 @@ function DashboardToday({ data }) {
                                                 Current model confidence is low ({(sel.modelConf * 100).toFixed(0)}%). Reelio is blending HMM state inference with heuristic scoring ({Math.round(sel.heuristicScore * 100)}%) to ensure capture events are not missed during learning.
                                             </div>
                                         )}
-
-                                            {hasSurvey && (
-                                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8 }}>
-                                                    <div style={{ padding: '4px 10px', background: 'rgba(58,158,111,0.1)', border: '1px solid rgba(58,158,111,0.2)', borderRadius: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
-                                                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#3A9E6F" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                                                            <polyline points="20 6 9 17 4 12" />
-                                                        </svg>
-                                                        <span style={{ fontSize: 10, fontWeight: 900, color: '#3A9E6F', textTransform: 'uppercase', letterSpacing: '0.02em' }}>
-                                                            {sel.retroactiveLabel ? "Retroactively Labeled" : "Surveyed"}
-                                                        </span>
-                                                    </div>
-                                                </div>
-                                            )}
-
-                                            {sel._sessionNum != null && sel._sessionDate && !hasSurvey && (
-                                                <button
-                                                    onClick={() => {
-                                                        const predSummary = sel.isDoom !== undefined
-                                                            ? `Reelio said: ${sel.isDoom ? 'Autopilot' : 'Mindful'}`
-                                                            : '';
-                                                        const prefill = JSON.stringify({
-                                                            postSessionRating: sel.postSessionRating || 0,
-                                                            regretScore:       sel.regretScore       || 0,
-                                                            moodBefore:        sel.moodBefore         || 0,
-                                                            moodAfter:         sel.moodAfter          || 0,
-                                                            intendedAction:    sel.intendedAction      || '',
-                                                            comparativeRating: sel.comparativeRating  || 0,
-                                                            _rawSessionNum:    sel._rawSessionNum,
-                                                            _rawStartTime:     sel._rawStartTime
-                                                        });
-                                                        const sNum = sel._sessionNum;
-                                                        const sDate = sel._sessionDate;
-                                                        
-                                                        if (!sNum || !sDate) {
-                                                            console.error("[Bridge] Missing session identity", { sNum, sDate });
-                                                            alert(`Cannot label session: identifiers missing (ID: ${sNum}, Date: ${sDate}). Try refreshing the dashboard.`);
-                                                            return;
-                                                        }
-
-                                                        const logPayload = JSON.stringify({
-                                                            sessionNum: String(sNum),
-                                                            date: String(sDate),
-                                                            predSummary,
-                                                            prefill
-                                                        });
-                                                        console.log("[Bridge] Launching openRetroactiveSurvey: " + logPayload);
-                                                        
-                                                        try {
-                                                            if (window.Android && window.Android.openRetroactiveSurvey) {
-                                                                window.Android.openRetroactiveSurvey(
-                                                                    String(sNum),
-                                                                    String(sDate),
-                                                                    String(predSummary),
-                                                                    String(prefill)
-                                                                );
-                                                                // Provide immediate visual feedback that the call was made
-                                                                console.log("[Bridge] Call to native openRetroactiveSurvey succeeded.");
-                                                            } else {
-                                                                console.warn("[Bridge] window.Android.openRetroactiveSurvey not found");
-                                                                alert("Native bridge (window.Android) is not available. This feature only works inside the app.");
-                                                            }
-                                                        } catch (err) {
-                                                            console.error("[Bridge] Native call failed", err);
-                                                            alert("System error launching survey: " + err.message);
-                                                        }
-                                                    }}
-                                                    style={{
-                                                        display: 'inline-flex', alignItems: 'center', gap: 5,
-                                                        fontSize: 11, fontWeight: 800, fontFamily: "'Space Grotesk', sans-serif",
-                                                        color: D.purple, background: 'rgba(107,63,160,0.10)',
-                                                        border: '1.5px solid rgba(107,63,160,0.18)',
-                                                        borderRadius: 10, padding: '6px 12px',
-                                                        cursor: 'pointer', letterSpacing: '0.02em'
-                                                    }}
-                                                >
-                                                    ✎ Label this session
-                                                </button>
-                                            )}
-                                            {(sel._sessionNum == null || !sel._sessionDate) && (
-                                                <div style={{ fontSize: 10, color: D.muted, opacity: 0.6 }}>No survey data</div>
-                                            )}
+                                            <div style={{ fontSize: 10, color: D.muted, opacity: 0.6, marginTop: 8 }}>No survey data</div>
                                         </div>
                                     )}
                                 </div>
@@ -472,7 +345,8 @@ function DashboardWeek({ data }) {
     const weeklyTrendData = heat.slice(-7).map((d, i) => ({
         day: d.dayLabel || ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"][i],
         dateLabel: d.dateLabel || d.date || "",
-        score: Math.round(safeNum(d.avgCapture, 0) * 100),
+        score: Math.round(safeNum(d.doomRate, 0) * 100),
+        sessions: maybeNum(d.sessionCount),
         index: i
     }));
 
@@ -501,7 +375,10 @@ function DashboardWeek({ data }) {
                                 />
                                 <Tooltip 
                                     contentStyle={{ background: D.cardLight, border: `1px solid ${D.borderSoft}`, borderRadius: 10, fontSize: 12, color: D.ink, boxShadow: '0 4px 16px rgba(0,0,0,0.08)' }}
-                                    formatter={(v) => [`${v}%`, 'Autopilot']}
+                                    formatter={(v, name, props) => {
+                                        const sessions = props.payload.sessions;
+                                        return [`${v}% rate - ${isFiniteNumber(sessions) ? sessions + ' session' + (sessions !== 1 ? 's' : '') : 'N/A'}`, 'Frequency'];
+                                    }}
                                     labelStyle={{ color: D.muted, fontWeight: 700 }}
                                 />
                                 <Line type="monotone" dataKey="score" stroke={D.purple} strokeWidth={2.5} dot={{ fill: D.purple, r: 4, stroke: D.cardLight, strokeWidth: 2 }} activeDot={{ r: 6, fill: D.purple, stroke: D.cardLight, strokeWidth: 2 }} />
@@ -509,9 +386,9 @@ function DashboardWeek({ data }) {
                         </ResponsiveContainer>
                     </div>
                     <div style={{ marginTop: 8, padding: '10px 12px', background: 'rgba(107,63,160,0.06)', borderRadius: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <div style={{ fontSize: 12, color: D.ink2, fontWeight: 600 }}>Avg this week</div>
+                        <div style={{ fontSize: 12, color: D.ink2, fontWeight: 600 }}>Avg this week (Mon-Present)</div>
                         <div style={{ fontSize: 16, fontWeight: 900, color: D.purple, fontFamily: 'Nunito' }}>
-                            {Math.round(weeklyTrendData.reduce((sum, d) => sum + d.score, 0) / weeklyTrendData.length)}%
+                            {isFiniteNumber(thisWeekRate) ? `${Math.round(thisWeekRate * 100)}%` : "--"}
                         </div>
                     </div>
                 </div>
@@ -536,13 +413,15 @@ function DashboardWeek({ data }) {
                                 {(() => {
                                     const dayNames = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
                                     const heatData = heat.map((d, i) => {
-                                        const rawVal = safeNum(d.avgCapture, 0) * 100;
+                                        const rateVal = safeNum(d.doomRate, 0) * 100;
+                                        const intensityVal = safeNum(d.avgCapture, 0) * 100;
                                         return {
                                             day: d.dayLabel || dayNames[i % 7],
                                             dateLabel: d.dateLabel || d.date || "",
-                                            value: Math.round(rawVal),
+                                            value: Math.round(rateVal),
+                                            intensity: Math.round(intensityVal),
                                             sessions: maybeNum(d.sessionCount),
-                                            raw: rawVal
+                                            raw: rateVal
                                         };
                                     });
                                     const avgVal = heatData.length > 0 
@@ -567,7 +446,11 @@ function DashboardWeek({ data }) {
                                                 contentStyle={{ background: D.cardLight, border: `1px solid ${D.borderSoft}`, borderRadius: 10, fontSize: 12, color: D.ink, boxShadow: '0 4px 16px rgba(0,0,0,0.08)' }}
                                                 formatter={(v, name, props) => {
                                                     const sessions = props.payload.sessions;
-                                                    return [`${v}% autopilot - ${isFiniteNumber(sessions) ? sessions + ' session' + (sessions !== 1 ? 's' : '') : 'N/A'}`, 'Risk'];
+                                                    const intensity = props.payload.intensity;
+                                                    return [
+                                                        `${v}% rate (${intensity}% intensity) - ${isFiniteNumber(sessions) ? sessions + ' session' + (sessions !== 1 ? 's' : '') : 'N/A'}`, 
+                                                        'Frequency'
+                                                    ];
                                                 }}
                                                 labelStyle={{ color: D.muted, fontWeight: 700 }}
                                                 labelFormatter={(label, payload) => {

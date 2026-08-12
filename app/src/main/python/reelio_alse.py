@@ -41,10 +41,148 @@ def apply_calibration(raw_score: float, bias: float = CALIBRATION_BIAS) -> float
 def compute_frequency_risk(sessions_today: int, baseline_daily_sessions: float) -> float:
     """Returns a 0-1 multiplier that amplifies capture risk
     when session count is anomalously high."""
-    if baseline_daily_sessions < 1.0:
+    if baseline_daily_sessions < 0.75:
         return 0.0
     freq_ratio = sessions_today / baseline_daily_sessions
-    return float(np.clip((freq_ratio - 2.0) / 2.0, 0.0, 1.0))
+    # Start ramping once the user is meaningfully above their own norm.
+    # This stays gentle for ordinary variation, then saturates for binge-like
+    # return patterns without dominating the behavioral evidence.
+    return float(np.clip((freq_ratio - 1.35) / 1.65, 0.0, 1.0))
+
+
+def apply_frequency_recurrence_to_results(results: list, baseline_daily_sessions: float) -> dict:
+    """
+    Post-process per-session payloads with a light day-level recurrence adjustment.
+
+    This preserves the HMM's within-session semantics while letting the calendar,
+    weekly views, and "all time" graphs reflect repeated returns on the same day.
+    """
+    if not results:
+        return {}
+
+    by_date = {}
+    for idx, row in enumerate(results):
+        start = str(row.get("startTime", "") or "")
+        date_key = start[:10] if len(start) >= 10 else str(row.get("date", "") or "")
+        if not date_key:
+            continue
+        by_date.setdefault(date_key, []).append((idx, row))
+
+    day_summary = {}
+    for date_key, rows in by_date.items():
+        sessions_count = len(rows)
+        freq_risk = compute_frequency_risk(sessions_count, baseline_daily_sessions)
+        raw_scores = [float(np.clip(float(r.get("S_t", 0.0)), 0.0, 1.0)) for _, r in rows]
+        if not raw_scores:
+            continue
+
+        mean_raw = float(np.mean(raw_scores))
+        peak_raw = float(np.max(raw_scores))
+        # Behavior-first daily severity: peak matters, but repeated medium-risk
+        # sessions should still accumulate meaningfully.
+        day_behavior = float(np.clip(max(peak_raw, 0.65 * mean_raw + 0.35 * peak_raw), 0.0, 1.0))
+        freq_boost = float(np.clip(0.18 * freq_risk * (0.35 + 0.65 * day_behavior), 0.0, 0.18))
+        day_capture = float(np.clip(day_behavior + freq_boost, 0.0, 1.0))
+
+        for order_idx, (result_idx, row) in enumerate(rows, start=1):
+            raw_st = float(np.clip(float(row.get("S_t", 0.0)), 0.0, 1.0))
+            # Slightly increase later sessions within a high-frequency day so the
+            # timeline reflects recurrence pressure without flattening everything.
+            ordinal_weight = order_idx / max(1, sessions_count)
+            session_boost = float(np.clip(0.12 * freq_risk * (0.25 + 0.75 * raw_st) * ordinal_weight, 0.0, 0.12))
+            adjusted_st = float(np.clip(raw_st + session_boost, 0.0, 1.0))
+            row["raw_S_t"] = raw_st
+            row["dayFrequencyRisk"] = round(freq_risk, 4)
+            row["S_t"] = adjusted_st
+            row["dayAdjustedCapture"] = round(day_capture, 4)
+            row["sessionsThatDay"] = sessions_count
+            results[result_idx] = row
+
+        day_summary[date_key] = {
+            "sessions": sessions_count,
+            "frequency_risk": freq_risk,
+            "day_behavior": day_behavior,
+            "day_capture": day_capture,
+        }
+
+    return day_summary
+
+
+def compute_weekly_summary_from_results(results: list) -> dict:
+    """
+    Build a week-over-week summary from the replayed session payload, using the
+    frequency-adjusted session scores that drive the calendar and related graphs.
+    """
+    if not results:
+        return {
+            'this_week_doom_rate': 0.0, 'last_week_doom_rate': 0.0, 'delta_pct': 0.0,
+            'session_count_this_week': 0, 'session_count_last_week': 0,
+            'insight': 'Not enough data yet for weekly summary.', 'regret_calibration': {}
+        }
+
+    timestamped = []
+    for row in results:
+        ts = pd.to_datetime(row.get('startTime', ''), errors='coerce')
+        score = pd.to_numeric(row.get('S_t', 0.0), errors='coerce')
+        if pd.isna(ts) or pd.isna(score):
+            continue
+        try:
+            if getattr(ts, 'tzinfo', None) is not None:
+                ts = ts.tz_convert('UTC').tz_localize(None)
+        except Exception:
+            try:
+                ts = ts.tz_localize(None)
+            except Exception:
+                pass
+        timestamped.append((float(np.clip(score, 0.0, 1.0)), ts))
+
+    if len(timestamped) < 3:
+        return {
+            'this_week_doom_rate': 0.0, 'last_week_doom_rate': 0.0, 'delta_pct': 0.0,
+            'session_count_this_week': len(timestamped), 'session_count_last_week': 0,
+            'insight': f'Building baseline ({len(timestamped)} sessions tracked so far).',
+            'regret_calibration': {}
+        }
+
+    anchor_ts = pd.Timestamp.now()
+    today = anchor_ts.floor('D')
+    days_since_monday = today.dayofweek
+    this_week_start = today - pd.Timedelta(days=days_since_monday)
+    last_week_start = this_week_start - pd.Timedelta(days=7)
+
+    this_week = [d for d, ts in timestamped if this_week_start <= ts <= anchor_ts]
+    last_week = [d for d, ts in timestamped if last_week_start <= ts < this_week_start]
+
+    this_week_doom = float(np.mean(this_week)) if this_week else 0.0
+    last_week_doom = float(np.mean(last_week)) if last_week else 0.0
+    delta_pct_pts = (last_week_doom - this_week_doom) * 100.0
+
+    if len(this_week) == 0:
+        insight = 'Not enough data for this week.'
+    elif len(last_week) == 0:
+        insight = f'This week capture rate: {this_week_doom*100:.0f}% (no prior-week baseline yet).'
+    elif abs(delta_pct_pts) < 3:
+        insight = f'Your capture pattern stayed stable at {this_week_doom*100:.0f}% this week.'
+    elif delta_pct_pts >= 12:
+        insight = f'Great progress! Your capture pattern dropped {delta_pct_pts:.0f}% this week.'
+    elif delta_pct_pts >= 5:
+        insight = f'Your capture pattern improved by {delta_pct_pts:.0f}% this week.'
+    elif delta_pct_pts <= -12:
+        insight = f'Your capture pattern intensified by {abs(delta_pct_pts):.0f}% this week.'
+    elif delta_pct_pts <= -5:
+        insight = f'Your capture pattern rose by {abs(delta_pct_pts):.0f}% this week.'
+    else:
+        insight = f'Your capture pattern shifted {abs(delta_pct_pts):.0f}% this week.'
+
+    return {
+        'this_week_doom_rate': this_week_doom,
+        'last_week_doom_rate': last_week_doom,
+        'delta_pct': delta_pct_pts,
+        'session_count_this_week': len(this_week),
+        'session_count_last_week': len(last_week),
+        'insight': insight,
+        'regret_calibration': {}
+    }
 
 COMPONENT_NAMES = [
     'session_length', 'exit_conflict', 'rapid_reentry', 
@@ -197,8 +335,10 @@ def compute_supervised_doom_label(
     Compute a supervised doom target in [0, 1] using the shared priority chain:
       Delayed Regret > Comparative > Immediate Regret > PostSessionRating.
 
-    This helper is used by both preprocess_session and apply_delayed_label to
-    avoid training-target drift across pathways.
+    This helper is used by preprocess_session. delayed_regret/comparative_rating
+    are almost always 0 now that the delayed-regret and retroactive survey
+    features were removed, but the priority chain is kept so any pre-existing
+    CSV rows with real historical values are still handled correctly.
     """
     imm = float(np.clip(float(regret_score) / 5.0, 0.0, 1.0)) if float(regret_score) > 0 else 0.0
     del_reg = float(np.clip(float(delayed_regret) / 5.0, 0.0, 1.0)) if float(delayed_regret) > 0 else 0.0
@@ -386,13 +526,26 @@ def preprocess_session(df):
             df['rhythm_dissociation'] = df['ScrollRhythmEntropy'].fillna(
                 df['ScrollRhythmEntropy'].median()
             )
-    if 'rewatch_flag' not in df.columns:
-        df['rewatch_flag'] = (df['BackScrollCount'] > 0).astype(float)
+    if 'scroll_interval_cv' not in df.columns:
+        if 'ScrollIntervalCV' in df.columns and not df['ScrollIntervalCV'].isna().all():
+            df['scroll_interval_cv'] = df['ScrollIntervalCV'].fillna(df['ScrollIntervalCV'].median())
+        else:
+            dwell_vals = pd.to_numeric(df['DwellTime'], errors='coerce').fillna(0.0)
+            mean_dwell = float(dwell_vals.mean())
+            std_dwell = float(dwell_vals.std()) if len(dwell_vals) > 1 else 0.0
+            df['scroll_interval_cv'] = (std_dwell / max(mean_dwell, 1e-3)) if mean_dwell > 0 else 0.0
+    if 'rewatch_intensity' not in df.columns:
+        backscroll = pd.to_numeric(df['BackScrollCount'], errors='coerce').fillna(0.0).clip(lower=0.0)
+        df['rewatch_intensity'] = np.log1p(backscroll)
     if 'exit_flag' not in df.columns:
-        df['exit_flag'] = (df['AppExitAttempts'] > 0).astype(float)
-    if 'swipe_incomplete' not in df.columns:
-        completion_ratio = (df['SwipeCompletionRatio'] if 'SwipeCompletionRatio' in df.columns else 1.0)
-        df['swipe_incomplete'] = np.clip(1.0 - completion_ratio, 0.0, 1.0)
+        exit_attempts = pd.to_numeric(df['AppExitAttempts'], errors='coerce').fillna(0.0).clip(lower=0.0)
+        df['exit_flag'] = np.log1p(exit_attempts)
+    if 'dwell_pctile' not in df.columns:
+        if 'DwellTimePctile' in df.columns and not df['DwellTimePctile'].isna().all():
+            df['dwell_pctile'] = pd.to_numeric(df['DwellTimePctile'], errors='coerce').fillna(df['DwellTimePctile'].median())
+        else:
+            dwell_rank = pd.to_numeric(df['DwellTime'], errors='coerce').rank(pct=True).fillna(0.5)
+            df['dwell_pctile'] = 100.0 * dwell_rank
         
     if 'supervised_doom' not in df.columns:
         df['supervised_doom'] = compute_supervised_doom_label(
@@ -592,6 +745,15 @@ def compute_environment_context(session_df, baseline: 'UserBaseline' = None) -> 
     dark_frac = float(pd.to_numeric(session_df['IsScreenInDarkRoom'], errors='coerce').fillna(float(lux < 15)).mean()) if 'IsScreenInDarkRoom' in session_df.columns else float(lux < 15)
     phase = float(pd.to_numeric(session_df['CircadianPhase'], errors='coerce').fillna(0.5).iloc[0]) if 'CircadianPhase' in session_df.columns else 0.5
     fatigue_risk = float(pd.to_numeric(session_df['fatigue_risk'], errors='coerce').fillna(0.0).iloc[0]) if 'fatigue_risk' in session_df.columns else 0.0
+    sleep_proxy = float(pd.to_numeric(session_df['SleepProxyScore'], errors='coerce').fillna(0.0).iloc[0]) if 'SleepProxyScore' in session_df.columns else 0.0
+    est_sleep_h = float(pd.to_numeric(session_df['EstimatedSleepDurationH'], errors='coerce').fillna(7.0).iloc[0]) if 'EstimatedSleepDurationH' in session_df.columns else 7.0
+    night_mode = float(pd.to_numeric(session_df['NightMode'], errors='coerce').fillna(0.0).mean()) if 'NightMode' in session_df.columns else 0.0
+    dnd = float(pd.to_numeric(session_df['DND'], errors='coerce').fillna(0.0).mean()) if 'DND' in session_df.columns else 0.0
+    notif_trigger = float(pd.to_numeric(session_df['SessionTriggeredByNotif'], errors='coerce').fillna(0.0).mean()) if 'SessionTriggeredByNotif' in session_df.columns else 0.0
+    direct_launch = float(pd.to_numeric(session_df['DirectLaunch'], errors='coerce').fillna(0.0).mean()) if 'DirectLaunch' in session_df.columns else 0.0
+    quick_return_gap = float(pd.to_numeric(session_df['TimeSinceLastSessionMin'], errors='coerce').fillna(180.0).iloc[0]) if 'TimeSinceLastSessionMin' in session_df.columns else 180.0
+    consistency_score = float(pd.to_numeric(session_df['ConsistencyScore'], errors='coerce').fillna(0.0).iloc[0]) if 'ConsistencyScore' in session_df.columns else 0.0
+    prev_app_category = str(session_df['PreviousAppCategory'].iloc[0]).strip().lower() if 'PreviousAppCategory' in session_df.columns else ""
     sleep_start = int(pd.to_numeric(session_df['SleepStart'], errors='coerce').fillna(1).iloc[0]) if 'SleepStart' in session_df.columns else 1
     sleep_end = int(pd.to_numeric(session_df['SleepEnd'], errors='coerce').fillna(8).iloc[0]) if 'SleepEnd' in session_df.columns else 8
 
@@ -622,15 +784,69 @@ def compute_environment_context(session_df, baseline: 'UserBaseline' = None) -> 
     charge_informativeness = _rate_informativeness(charge_base)
 
     sleep_intrusion = float(np.clip(0.65 + 0.35 * sleep_depth, 0.0, 1.0)) if in_sleep_window else 0.0
-    rest_disruption = float(np.clip(0.78 * sleep_intrusion + 0.22 * fatigue_risk, 0.0, 1.0))
+    short_sleep_raw = float(np.clip((6.5 - est_sleep_h) / 2.5, 0.0, 1.0))
+    # EstimatedSleepDurationH is a proxy, so only trust it strongly when the
+    # surrounding sleep signals agree that this session is sleep-vulnerable.
+    sleep_estimate_conf = float(np.clip(0.20 + 0.45 * sleep_proxy + 0.35 * sleep_intrusion, 0.0, 1.0))
+    short_sleep_risk = float(np.clip(short_sleep_raw * sleep_estimate_conf, 0.0, 1.0))
+    rest_disruption = float(np.clip(
+        0.50 * sleep_intrusion +
+        0.20 * fatigue_risk +
+        0.18 * sleep_proxy +
+        0.12 * short_sleep_risk,
+        0.0,
+        1.0
+    ))
+
+    if baseline is not None and isinstance(getattr(baseline, 'typical_hour', None), np.ndarray) and len(baseline.typical_hour) == 24:
+        hour_prob = float(np.clip(baseline.typical_hour[hour], 1e-6, 1.0))
+        mean_hour_prob = float(np.clip(np.mean(baseline.typical_hour), 1e-6, 1.0))
+        hour_anomaly = float(np.clip(1.0 - (hour_prob / max(mean_hour_prob, 1e-6)), 0.0, 1.0))
+    else:
+        hour_anomaly = 0.0
+
+    quick_return_risk = float(np.clip((45.0 - quick_return_gap) / 45.0, 0.0, 1.0))
+    consistency_risk = float(np.clip(consistency_score / 6.0, 0.0, 1.0))
+    prev_app_risk = 1.0 if prev_app_category in ('social', 'entertainment', 'unknown', 'boredom') else 0.0
+
+    immersion_setup_risk = float(np.clip(
+        0.30 * (lux_informativeness * low_lux_anomaly) +
+        0.30 * (dark_informativeness * dark_room_anomaly) +
+        0.14 * night_mode +
+        0.14 * dnd +
+        0.12 * (charge_informativeness * charging_anomaly),
+        0.0,
+        1.0
+    ))
+
+    entry_context_risk = float(np.clip(
+        0.34 * notif_trigger +
+        0.22 * direct_launch +
+        0.24 * quick_return_risk +
+        0.20 * prev_app_risk,
+        0.0,
+        1.0
+    ))
+
+    routine_disruption = float(np.clip(
+        0.42 * hour_anomaly +
+        0.28 * consistency_risk +
+        0.30 * hour_anomaly * consistency_risk,
+        0.0,
+        1.0
+    ))
+
+    context_stack = np.array([rest_disruption, immersion_setup_risk, entry_context_risk, routine_disruption], dtype=float)
+    elevated = float(np.sum(context_stack >= 0.45))
+    synergy = float(np.clip(max(0.0, elevated - 1.0) / 3.0, 0.0, 1.0))
 
     env_blend = (
-        0.72 * rest_disruption +
-        0.12 * lux_informativeness * low_lux_anomaly +
-        0.10 * dark_informativeness * dark_room_anomaly +
-        0.06 * charge_informativeness * charging_anomaly
+        0.42 * rest_disruption +
+        0.22 * immersion_setup_risk +
+        0.20 * entry_context_risk +
+        0.16 * routine_disruption
     )
-    environment_risk = float(np.clip(max(rest_disruption, env_blend), 0.0, 1.0))
+    environment_risk = float(np.clip(max(rest_disruption, env_blend + 0.12 * synergy * np.max(context_stack)), 0.0, 1.0))
 
     return {
         'hour': float(hour),
@@ -643,9 +859,21 @@ def compute_environment_context(session_df, baseline: 'UserBaseline' = None) -> 
         'low_lux_anomaly': float(low_lux_anomaly),
         'dark_room_anomaly': float(dark_room_anomaly),
         'charging_anomaly': float(charging_anomaly),
+        'short_sleep_risk': float(short_sleep_risk),
+        'hour_anomaly': float(hour_anomaly),
+        'quick_return_risk': float(quick_return_risk),
+        'consistency_risk': float(consistency_risk),
+        'night_mode': float(night_mode),
+        'dnd': float(dnd),
+        'notif_trigger': float(notif_trigger),
+        'direct_launch': float(direct_launch),
         'lux_informativeness': float(lux_informativeness),
         'dark_informativeness': float(dark_informativeness),
         'charge_informativeness': float(charge_informativeness),
+        'immersion_setup_risk': float(immersion_setup_risk),
+        'entry_context_risk': float(entry_context_risk),
+        'routine_disruption': float(routine_disruption),
+        'context_synergy': float(synergy),
         'environment_risk': float(environment_risk),
     }
 
@@ -1094,7 +1322,7 @@ class ReelioCLSE:
         
         self.h = np.array([0.15, 0.05])
         
-        self.num_features = 7  # FIX-09: added SpeedDwellRatio
+        self.num_features = 7  # Revised emission set: dwell, speed, rhythm, rewatch, exit, dwell_pctile, scroll_cv
         self.feature_weights = np.ones(self.num_features) / self.num_features
         self.feature_mask = np.ones(self.num_features, dtype=bool)
         
@@ -1125,8 +1353,8 @@ class ReelioCLSE:
         return {
             'sum_xi': np.zeros((2, 2)),
             'sum_gamma': np.zeros(2),
-            'sum_x': np.zeros((7, 2)),  # FIX-09: 7 features
-            'sum_x2': np.zeros((7, 2)),  # FIX-09: 7 features
+            'sum_x': np.zeros((7, 2)),  # 7 continuous features
+            'sum_x2': np.zeros((7, 2)),  # 7 continuous features
             'sum_xy': np.zeros(2),
             'n_sessions': np.zeros(2),
             'sum_len': np.zeros(2)
@@ -1143,21 +1371,32 @@ class ReelioCLSE:
         self.mu[1, 1] = priors['speed_mu_prior_doom']
         self.sigma[1, :] = baseline.speed_sig_personal
         
-        self.mu[2, :] = 0.5
-        self.sigma[2, :] = 0.2
-        self.p_bern[3, :] = priors['rewatch_rate_prior']
+        self.mu[2, 0] = 1.0
+        self.mu[2, 1] = 1.8
+        self.sigma[2, :] = 0.5
+
+        rewatch_vals = pd.to_numeric(df['rewatch_intensity'], errors='coerce').fillna(0.0)
+        rewatch_mu = float(rewatch_vals.mean()) if len(rewatch_vals) > 0 else 0.0
+        self.mu[3, 0] = max(0.0, rewatch_mu * 0.7)
+        self.mu[3, 1] = max(self.mu[3, 0] + 0.10, rewatch_mu * 1.3 + 0.05)
+        self.sigma[3, :] = 0.35
+
+        exit_vals = pd.to_numeric(df['exit_flag'], errors='coerce').fillna(0.0)
+        exit_mu = float(exit_vals.mean()) if len(exit_vals) > 0 else 0.0
+        self.mu[4, 0] = max(0.0, exit_mu * 0.7)
+        self.mu[4, 1] = max(self.mu[4, 0] + 0.10, exit_mu * 1.35 + 0.05)
+        self.sigma[4, :] = 0.40
+
+        self.mu[5, 0] = 45.0
+        self.mu[5, 1] = 62.0
+        self.sigma[5, :] = 18.0
         
-        # Changed to soft continuous feature as requested
-        exit_p = min(df['AppExitAttempts'].sum() / 5.0, 1.0) if 'AppExitAttempts' in df.columns else priors['exit_rate_prior']
-        self.p_bern[4, 0] = np.clip(exit_p * 0.4, 0.01, 0.40)   # casual: few exit attempts
-        self.p_bern[4, 1] = np.clip(exit_p * 2.5, 0.15, 0.90)   # doom: many failed exit attempts
-        
-        self.p_bern[5, :] = 0.5
-        
-        # FIX-09: Initialize SpeedDwellRatio (index 6) — Gaussian feature
-        self.mu[6, 0] = 0.5   # casual: moderate speed-to-dwell ratio
-        self.mu[6, 1] = 1.5   # doom: high speed + low dwell
-        self.sigma[6, :] = 0.5
+        # Scroll CV replaces SpeedDwellRatio at index 6.
+        scroll_cv_vals = pd.to_numeric(df['scroll_interval_cv'], errors='coerce').fillna(0.0)
+        scroll_cv_mu = float(scroll_cv_vals.mean()) if len(scroll_cv_vals) > 0 else 0.0
+        self.mu[6, 0] = max(0.2, scroll_cv_mu * 0.8)
+        self.mu[6, 1] = max(self.mu[6, 0] + 0.10, scroll_cv_mu * 1.2 + 0.10)
+        self.sigma[6, :] = 0.45
         
         for bank in [self.SS_recent, self.SS_medium, self.SS_long]:
             bank['sum_gamma'] = np.array([2.0, 1.0])
@@ -1264,12 +1503,12 @@ class ReelioCLSE:
         if self.feature_mask[2]:
             ll += w[2] * self._log_emission_gaussian(features[2], self.mu[2, state], self.sigma[2, state])
         if self.feature_mask[3]:
-            ll += w[3] * self._log_emission_bernoulli(features[3], self.p_bern[3, state])
+            ll += w[3] * self._log_emission_gaussian(features[3], self.mu[3, state], self.sigma[3, state])
         if self.feature_mask[4]:
-            ll += w[4] * self._log_emission_bernoulli(features[4], self.p_bern[4, state])
+            ll += w[4] * self._log_emission_gaussian(features[4], self.mu[4, state], self.sigma[4, state])
         if self.feature_mask[5]:
             ll += w[5] * self._log_emission_gaussian(features[5], self.mu[5, state], self.sigma[5, state])
-        # FIX-09: SpeedDwellRatio (index 6) — Gaussian
+        # Index 6 is scroll interval CV.
         if self.num_features > 6 and self.feature_mask[6]:
             ll += w[6] * self._log_emission_gaussian(features[6], self.mu[6, state], self.sigma[6, state])
             
@@ -1404,15 +1643,18 @@ class ReelioCLSE:
         # Data quantity confidence: saturates at ~20 sessions.
         C_volume = float(np.clip(self.n_sessions_seen / 20.0, 0.0, 1.0))
 
-        # State separation confidence from dwell feature overlap.
-        mu_doom = float(self.mu[0, 1])
-        mu_casual = float(self.mu[0, 0])
-        sigma_avg = float((self.sigma[0, 0] + self.sigma[0, 1]) / 2.0)
-        if sigma_avg > 1e-9:
-            separation = abs(mu_casual - mu_doom) / sigma_avg
-            C_separation = float(np.clip(separation / 2.0, 0.0, 1.0))
-        else:
-            C_separation = 0.0
+        # Multivariate State separation confidence
+        D_B = 0.0
+        for i in range(self.num_features):
+            mu_c, mu_d = float(self.mu[i, 0]), float(self.mu[i, 1])
+            sig_c, sig_d = float(self.sigma[i, 0]), float(self.sigma[i, 1])
+            if sig_c > 1e-6 and sig_d > 1e-6:
+                var_c, var_d = sig_c ** 2, sig_d ** 2
+                mean_term = 0.25 * ((mu_c - mu_d) ** 2) / (var_c + var_d)
+                cov_term = 0.5 * math.log((var_c + var_d) / (2.0 * sig_c * sig_d))
+                D_B += (mean_term + cov_term)
+
+        C_separation = float(np.clip(1.0 - math.exp(-D_B / 1.5), 0.0, 1.0))
 
         # Stability confidence from regime alert frequency.
         if self.n_sessions_seen > 0:
@@ -1494,19 +1736,13 @@ class ReelioCLSE:
         for k in range(self.num_features):
             if not self.feature_mask[k]:
                 continue
-            if k in (0, 1, 2, 5):  # Gaussian
+            if k in (0, 1, 2, 3, 4, 5, 6):  # Gaussian
                 mu1, sig1 = self.mu[k, 0], self.sigma[k, 0]
                 mu2, sig2 = self.mu[k, 1], self.sigma[k, 1]
                 kl = np.log(sig2/sig1) + (sig1**2 + (mu1-mu2)**2)/(2*sig2**2) - 0.5
                 # FIX (Bug 5): floor at 0 — KL can be negative when sig1 > sig2 with similar means,
                 # producing negative feature weights after normalization
                 kl_divs[k] = np.maximum(kl, 0.0)
-            else:  # Bernoulli
-                p1 = self.p_bern[k, 0]
-                p2 = self.p_bern[k, 1]
-                kl = p1 * np.log(p1/p2) + (1-p1) * np.log((1-p1)/(1-p2))
-                kl_divs[k] = kl
-                
         sum_kl = np.sum(kl_divs)
         if sum_kl > 1e-9:
             self.feature_weights = kl_divs / sum_kl
@@ -1573,16 +1809,16 @@ class ReelioCLSE:
         Keep architectural inequalities intact even when incremental updates drift.
         This prevents persisted states from violating core semantics consumed by UI.
         """
-        # Doom rewatch/exit attempt rates should exceed casual rates.
-        if self.p_bern[3, 1] <= self.p_bern[3, 0]:
-            mid = 0.5 * (self.p_bern[3, 0] + self.p_bern[3, 1])
-            self.p_bern[3, 0] = np.clip(mid - 0.01, 0.01, 0.98)
-            self.p_bern[3, 1] = np.clip(mid + 0.01, 0.02, 0.99)
+        # Doom rewatch and exit conflict should exceed casual levels.
+        if self.mu[3, 1] <= self.mu[3, 0]:
+            mid = 0.5 * (self.mu[3, 0] + self.mu[3, 1])
+            self.mu[3, 0] = mid - 0.01
+            self.mu[3, 1] = mid + 0.01
 
-        if self.p_bern[4, 1] <= self.p_bern[4, 0]:
-            mid = 0.5 * (self.p_bern[4, 0] + self.p_bern[4, 1])
-            self.p_bern[4, 0] = np.clip(mid - 0.01, 0.01, 0.98)
-            self.p_bern[4, 1] = np.clip(mid + 0.01, 0.02, 0.99)
+        if self.mu[4, 1] <= self.mu[4, 0]:
+            mid = 0.5 * (self.mu[4, 0] + self.mu[4, 1])
+            self.mu[4, 0] = mid - 0.01
+            self.mu[4, 1] = mid + 0.01
 
         # Pull rate should exceed escape rate at the CTMC parameter level.
         if self.q_10 >= self.q_01:
@@ -1655,10 +1891,7 @@ class ReelioCLSE:
                 # FIX (Bug 7): branch Bernoulli vs Gaussian — only compute sigma for
                 # continuous features; copy mu directly to p_bern for discrete ones
                 for k in range(self.num_features):
-                    if k in (3, 4):  # Bernoulli features
-                        self.p_bern[k, s] = np.clip(self.mu[k, s], 0.01, 0.99)
-                    else:  # Gaussian features
-                        self.sigma[k, s] = np.sqrt(max(var[k], 0.0025))
+                    self.sigma[k, s] = np.sqrt(max(var[k], 0.0025))
 
                 cov = (xy_mix[s] / g_mix[s]) - (self.mu[0, s] * self.mu[1, s])
                 self.rho_dwell_speed[s] = cov / (self.sigma[0, s] * self.sigma[1, s] + 1e-9)
@@ -1704,11 +1937,23 @@ class ReelioCLSE:
             df['exit_flag'] = float(np.clip(exit_raw / exit_baseline, 0.0, 1.0))
         else:
             df['exit_flag'] = 0.0
-        # FIX-09: Add SpeedDwellRatio to observation vector
-        if 'SpeedDwellRatio' not in df.columns:
-            dwell_vals = df['DwellTime'] if 'DwellTime' in df.columns else np.exp(df['log_dwell'])
-            df['SpeedDwellRatio'] = np.log1p(df['AvgScrollSpeed'].clip(lower=0)) / np.log1p(dwell_vals.clip(lower=0.1))
-        obs = df[['log_dwell', 'log_speed', 'rhythm_dissociation', 'rewatch_flag', 'exit_flag', 'swipe_incomplete', 'SpeedDwellRatio']].values
+        if 'scroll_interval_cv' not in df.columns:
+            if 'ScrollIntervalCV' in df.columns:
+                df['scroll_interval_cv'] = pd.to_numeric(df['ScrollIntervalCV'], errors='coerce').fillna(0.0)
+            else:
+                dwell_vals = pd.to_numeric(df['DwellTime'], errors='coerce').fillna(0.0)
+                mean_dwell = float(dwell_vals.mean())
+                std_dwell = float(dwell_vals.std()) if len(dwell_vals) > 1 else 0.0
+                df['scroll_interval_cv'] = (std_dwell / max(mean_dwell, 1e-3)) if mean_dwell > 0 else 0.0
+        if 'rewatch_intensity' not in df.columns:
+            backscroll = pd.to_numeric(df['BackScrollCount'], errors='coerce').fillna(0.0).clip(lower=0.0)
+            df['rewatch_intensity'] = np.log1p(backscroll)
+        if 'dwell_pctile' not in df.columns:
+            if 'DwellTimePctile' in df.columns:
+                df['dwell_pctile'] = pd.to_numeric(df['DwellTimePctile'], errors='coerce').fillna(50.0)
+            else:
+                df['dwell_pctile'] = 100.0 * pd.to_numeric(df['DwellTime'], errors='coerce').rank(pct=True).fillna(0.5)
+        obs = df[['log_dwell', 'log_speed', 'rhythm_dissociation', 'rewatch_intensity', 'exit_flag', 'dwell_pctile', 'scroll_interval_cv']].values
         
         if self.n_sessions_seen == 0:
             self._initialize_from_data(df, baseline)
@@ -1752,7 +1997,7 @@ class ReelioCLSE:
             np.cos(phase * 2 * np.pi),
             gap_hr / 10.0,
             env_ctx['rest_disruption'],
-            env_ctx['charge_informativeness'] * env_ctx['charging_anomaly'],
+            env_ctx['entry_context_risk'],
             1.0 if day_of_week in (1, 7) else 0.0,
             stress_flag,                                 # index 7: pre-session stress/avoidance
             mood_risk                                    # index 8: pre-session state risk
@@ -1849,11 +2094,11 @@ def validate_model(model: ReelioCLSE) -> list:
     if model.mu[1, 1] <= model.mu[1, 0]:
         errors.append("Validation Failed: Doom Speed mu must be > Casual Speed mu (faster velocity)")
         
-    if model.p_bern[3, 1] <= model.p_bern[3, 0]:
-        errors.append("Validation Failed: Doom Rewatch Rate must be > Casual Rewatch Rate")
+    if model.mu[3, 1] <= model.mu[3, 0]:
+        errors.append("Validation Failed: Doom Rewatch Intensity must be > Casual")
         
-    if model.p_bern[4, 1] <= model.p_bern[4, 0]:
-        errors.append("Validation Failed: Doom Exit Attempt Rate must be > Casual (doom = more failed exits)")
+    if model.mu[4, 1] <= model.mu[4, 0]:
+        errors.append("Validation Failed: Doom Exit Conflict Intensity must be > Casual")
         
     if model.q_10 >= model.q_01:
         errors.append("Validation Failed: q_10 (escape) must be < q_01 (pull)")
@@ -1998,88 +2243,6 @@ def save_full_state(state_path: str, model, baseline, detector, scorer, prev_gam
     except Exception as e:
         print(f"STATE_SAVE_FAILED: {e}")
 
-
-def apply_delayed_label(state_path: str, delayed_regret: int, comparative: int) -> str:
-    """
-    Called when delayed probe fires (~1hr post-session).
-    Updates running_disagreement with higher-confidence label
-    WITHOUT re-running the full HMM pipeline.
-    Returns JSON status string.
-    """
-    try:
-        model, baseline, detector, scorer, prev_gamma = load_full_state(state_path)
-
-        has_delayed = delayed_regret > 0
-        has_comp = comparative > 0
-        if not has_delayed and not has_comp:
-            return json.dumps({"status": "no_update", "reason": "no delayed or comparative data"})
-
-        snapshot = model.last_label_snapshot if isinstance(getattr(model, 'last_label_snapshot', {}), dict) else {}
-        post_raw = float(snapshot.get('PostSessionRating', 0.0) or 0.0)
-        imm_raw = float(snapshot.get('RegretScore', 0.0) or 0.0)
-        match_raw = float(snapshot.get('ActualVsIntendedMatch', 2.0) or 2.0)
-        intended = str(snapshot.get('IntendedAction', '') or '')
-
-        # Use the exact same label-priority chain as preprocess_session.
-        supervised_doom = compute_supervised_doom_label(
-            regret_score=imm_raw,
-            delayed_regret=float(delayed_regret),
-            comparative_rating=float(comparative),
-            post_session_rating=post_raw,
-            intended_action=intended,
-            actual_vs_intended_match=match_raw
-        )
-
-        # Label confidence follows the same hierarchy semantics.
-        if has_delayed and has_comp:
-            label_conf = 1.00
-        elif has_delayed:
-            label_conf = 0.85
-        else:
-            label_conf = 0.70
-        
-        # Last session's raw HMM doom is stored in detector history
-        if not detector.doom_history:
-            return json.dumps({"status": "no_update", "reason": "no doom history available"})
-        last_hmm_doom = detector.doom_history[-1]
-        
-        # Recalculate disagreement bias with the stronger label
-        bias = model._compute_disagreement_bias(last_hmm_doom, supervised_doom, label_conf)
-        model.running_disagreement = float(np.clip(
-            model.running_disagreement * model.disagreement_decay + bias,
-            -0.25, 0.25
-        ))
-
-        # Preserve enriched snapshot for future delayed/calibration updates.
-        model.last_label_snapshot = {
-            **snapshot,
-            'DelayedRegretScore': float(delayed_regret),
-            'ComparativeRating': float(comparative),
-            'supervised_doom': float(supervised_doom)
-        }
-        
-        # FIXED: Update regret_validator with delayed label (highest-confidence signal)
-        # Delayed regret is label_conf=1.0, the best calibration signal we have
-        if hasattr(detector, 'regret_validator') and detector.regret_validator:
-            try:
-                detector.regret_validator.add_observation(
-                    last_hmm_doom,
-                    delayed_regret,
-                    timestamp="delayed_probe",
-                    regret_scale="raw_1_5"
-                )
-                delayed_calib = detector.regret_validator.get_calibration_quality()
-                print(f"DELAYED_LABEL_REGRET_VALIDATOR: n_samples={delayed_calib['n_samples']}, "
-                      f"mae={delayed_calib['mae']:.3f}, bias={delayed_calib['systematic_bias']:.3f}")
-            except Exception as rv_err:
-                print(f"DELAYED_LABEL_REGRET_VALIDATOR_FAILED: {rv_err}")
-        
-        save_full_state(state_path, model, baseline, detector, scorer, prev_gamma)
-        print(f"DELAYED_LABEL_APPLIED: conf={label_conf} bias={bias:.4f} disagreement={model.running_disagreement:.4f}")
-        return json.dumps({"status": "updated", "label_conf": label_conf, "bias": float(bias)})
-    except Exception as e:
-        print(f"DELAYED_LABEL_FAILED: {e}")
-        return json.dumps({"status": "error", "message": str(e)})
 
 def run_inference_on_latest(csv_data: str, model_state_path: str, survey_data: dict = None) -> dict:
     import io
@@ -2241,8 +2404,162 @@ def run_full_pipeline(csv_path: str, state_path: str = None) -> ReelioCLSE:
             
     if state_path:
         save_full_state(state_path, model, baseline, detector, scorer, prev_gamma)
-            
+
     return model
+
+
+# ── Incremental dashboard-replay checkpoint ──────────────────────────────────
+# See docs/DECISIONS.md: "Incremental dashboard-replay checkpointing" for the
+# full design rationale. Summary: run_dashboard_payload() used to replay every
+# session ever recorded, every time it was called (O(total sessions)). This
+# checkpoint lets it skip sessions it has already scored and only process new
+# ones (O(new sessions)) -- but ONLY when nothing about the already-scored
+# sessions has changed. The immediate post-session survey (MicroProbeActivity)
+# patches a session's CSV row asynchronously, ~30-45s after the session ends --
+# if the dashboard is opened before that patch lands, the checkpoint captures
+# the pre-survey row. Because feature weights are learned from the ENTIRE
+# session history (KL-divergence reweighting in ReelioCLSE), that kind of
+# change can legitimately affect how every later session is scored. So the
+# checkpoint is validated with a per-session fingerprint; ANY mismatch anywhere
+# in the already-cached prefix throws the whole checkpoint away and falls back
+# to a full replay from session 0 -- identical to today's existing,
+# already-correct behavior. The fast path is a pure addition; nothing about
+# the full-replay path below is changed.
+#
+# (There used to also be a "retroactive survey" feature -- letting the user
+# add/edit survey data for a past session at any time -- and a "1hr delayed
+# regret survey". Both were removed; survey/label columns are now written
+# once, shortly after the session ends, and never rewritten afterward. This
+# fingerprint is kept because the async ~30-45s race above is still real.)
+DASHBOARD_REPLAY_CHECKPOINT_VERSION = 1
+_SURVEY_LABEL_COLUMNS = [
+    'PostSessionRating', 'RegretScore', 'MoodBefore', 'MoodAfter',
+    'IntendedAction', 'ActualVsIntendedMatch', 'ComparativeRating'
+]
+
+
+def _session_identity_fingerprint(raw_s_df: pd.DataFrame) -> dict:
+    """
+    Cheap fingerprint of everything about one session that can change its
+    contribution to the HMM replay: row count and the survey/label columns
+    the immediate post-session survey can still patch in asynchronously after
+    the session's CSV rows are first written. Two calls with an unchanged
+    session return equal dicts; a late-arriving survey answer changes it.
+
+    Deliberately computed from the RAW (pre-dedupe, pre-preprocess) session
+    dataframe so it means the same thing whether it's computed while checking
+    an old checkpoint or while building a new one.
+    """
+    first = raw_s_df.iloc[0]
+    labels = {
+        c: (str(first[c]) if c in raw_s_df.columns and pd.notna(first[c]) else "")
+        for c in _SURVEY_LABEL_COLUMNS
+    }
+    return {
+        "n_rows": int(len(raw_s_df)),
+        "start": str(first.get('StartTime', '')),
+        "labels": labels,
+    }
+
+
+def load_replay_checkpoint(checkpoint_path: str):
+    """
+    Loads the dashboard-replay checkpoint (model/baseline/detector/scorer state
+    plus the replay loop's own bookkeeping: already-computed session results
+    and the running aggregates needed to keep extending them). Returns None on
+    any missing/invalid/version-mismatched checkpoint so the caller falls back
+    to a full replay -- this function fails safe, never fails loud.
+    """
+    if not checkpoint_path or not os.path.exists(checkpoint_path):
+        return None
+    try:
+        with open(checkpoint_path, 'r') as f:
+            data = json.load(f)
+        if int(data.get('checkpoint_version', 0)) != DASHBOARD_REPLAY_CHECKPOINT_VERSION:
+            return None
+
+        model = ReelioCLSE()
+        model._checkpoint_dict = data['model_state']
+        model._rollback()
+        model._clip_params()
+
+        baseline = UserBaseline.from_dict(data['baseline_state'])
+
+        detector = RegimeDetector()
+        d_state = data['detector_state']
+        detector.doom_history = d_state.get('doom_history', [])
+        detector.dwell_history = d_state.get('dwell_history', [])
+        detector.len_history = d_state.get('len_history', [])
+        detector.hour_history = d_state.get('hour_history', [])
+        detector.doom_timestamps = d_state.get('doom_timestamps', [])
+        detector.regime_alert = d_state.get('regime_alert', False)
+        detector.regret_validator = RegretValidator.from_dict(d_state.get('regret_validator', {}))
+
+        scorer = DoomScorer()
+        s_state = data['scorer_state']
+        scorer.component_weights = np.array(s_state['component_weights'])
+        scorer.n_updates = s_state['n_updates']
+
+        prev_g = data.get('prev_gamma')
+        prev_gamma = np.array(prev_g) if prev_g is not None else None
+
+        return {
+            "model": model, "baseline": baseline, "detector": detector, "scorer": scorer,
+            "prev_gamma": prev_gamma,
+            "fingerprints": data.get('fingerprints', []),
+            "results": data.get('results', []),
+            "sess_labels": data.get('sess_labels', []),
+            "historical_agg": data.get('historical_agg', {}),
+            "total_st_weight": float(data.get('total_st_weight', 0.0)),
+            "p_capture_timeline": data.get('p_capture_timeline', []),
+            "session_circadian": data.get('session_circadian', []),
+        }
+    except Exception as e:
+        print(f"REPLAY_CHECKPOINT_LOAD_FAILED: {e}")
+        return None
+
+
+def save_replay_checkpoint(checkpoint_path: str, model, baseline, detector, scorer, prev_gamma,
+                            fingerprints, results, sess_labels, historical_agg,
+                            total_st_weight, p_capture_timeline, session_circadian):
+    if not checkpoint_path:
+        return
+    try:
+        model._checkpoint()
+        regret_validator_state = (
+            detector.regret_validator.to_dict()
+            if getattr(detector, 'regret_validator', None) else {}
+        )
+        data = {
+            'checkpoint_version': DASHBOARD_REPLAY_CHECKPOINT_VERSION,
+            'model_state': model._checkpoint_dict,
+            'baseline_state': baseline.to_dict(),
+            'detector_state': {
+                'doom_history': detector.doom_history,
+                'doom_timestamps': detector.doom_timestamps,
+                'dwell_history': detector.dwell_history,
+                'len_history': detector.len_history,
+                'hour_history': detector.hour_history,
+                'regime_alert': detector.regime_alert,
+                'regret_validator': regret_validator_state,
+            },
+            'scorer_state': {
+                'component_weights': scorer.component_weights.tolist(),
+                'n_updates': scorer.n_updates,
+            },
+            'prev_gamma': prev_gamma.tolist() if prev_gamma is not None else None,
+            'fingerprints': fingerprints,
+            'results': results,
+            'sess_labels': sess_labels,
+            'historical_agg': historical_agg,
+            'total_st_weight': total_st_weight,
+            'p_capture_timeline': p_capture_timeline,
+            'session_circadian': session_circadian,
+        }
+        with open(checkpoint_path, 'w') as f:
+            json.dump(data, f, default=_np_serial)
+    except Exception as e:
+        print(f"REPLAY_CHECKPOINT_SAVE_FAILED: {e}")
 
 
 def run_dashboard_payload(csv_data: str, state_path: str = None, survey_data: dict = None) -> str:
@@ -2270,6 +2587,9 @@ def run_dashboard_payload(csv_data: str, state_path: str = None, survey_data: di
         validate_csv_schema(df)
     except SchemaError as se:
         return json.dumps({"error": f"CSV schema error: {str(se)}", "sessions": []})
+        
+    if df.empty:
+        return json.dumps({"error": "No data available yet. Scroll a few more reels!", "sessions": []})
         
     # Preserve delayed-label supervision signals across dashboard replays.
     preserved_disagreement = None
@@ -2312,49 +2632,6 @@ def run_dashboard_payload(csv_data: str, state_path: str = None, survey_data: di
     if 'SessionNum' not in df.columns:
         return json.dumps({"error": "Schema missing SessionNum", "sessions": []})
 
-    # retroactive_label_map:
-    #   key   = (sessionNum, date)  OR  (_rawSessionNum, raw_date)
-    #   value = dict of survey fields from the last cached HMM payload
-    #           (postSessionRating, regretScore, moodBefore, moodAfter,
-    #            intendedAction, actualVsIntended, comparativeRating,
-    #            delayedRegretScore, hasSurvey, retroactiveLabel).
-    retroactive_label_map = {}
-    if state_path:
-        try:
-            hmm_cache_path = os.path.join(os.path.dirname(state_path), "hmm_results.json")
-            if os.path.exists(hmm_cache_path):
-                previous_root = json.loads(open(hmm_cache_path, "r", encoding="utf-8").read())
-                previous_sessions = previous_root.get("sessions", []) if isinstance(previous_root, dict) else []
-                for sess in previous_sessions:
-                    if not isinstance(sess, dict):
-                        continue
-                    if not bool(sess.get("retroactiveLabel", False)):
-                        continue
-                    # Extract the most recent survey label payload for this session.
-                    label_payload = {
-                        "postSessionRating":  int(sess.get("postSessionRating", 0) or 0),
-                        "regretScore":        int(sess.get("regretScore", 0) or 0),
-                        "moodBefore":         int(sess.get("moodBefore", 0) or 0),
-                        "moodAfter":          int(sess.get("moodAfter", 0) or 0),
-                        "intendedAction":     str(sess.get("intendedAction", "") or ""),
-                        "actualVsIntended":   int(sess.get("actualVsIntended", 0) or 0),
-                        "comparativeRating":  int(sess.get("comparativeRating", 0) or 0),
-                        "delayedRegretScore": int(sess.get("delayedRegretScore", 0) or 0),
-                        "hasSurvey":          bool(sess.get("hasSurvey", False)),
-                        "retroactiveLabel":   True,
-                    }
-                    raw_num = str(sess.get("_rawSessionNum", "")).strip()
-                    raw_start = str(sess.get("_rawStartTime", "")).strip()
-                    raw_date = raw_start[:10] if len(raw_start) >= 10 else ""
-                    sess_num = str(sess.get("sessionNum", "")).strip()
-                    sess_date = str(sess.get("date", "")).strip()
-                    if raw_num and raw_date:
-                        retroactive_label_map[(raw_num, raw_date)] = label_payload
-                    if sess_num and sess_date:
-                        retroactive_label_map[(sess_num, sess_date)] = label_payload
-        except Exception:
-            retroactive_label_map = {}
-
     df['_session_key'] = df.apply(make_session_key, axis=1)
     session_list = sorted(
         df.groupby('_session_key'),
@@ -2370,23 +2647,72 @@ def run_dashboard_payload(csv_data: str, state_path: str = None, survey_data: di
         # Update back in the list
         session_list[-1] = (latest_sess_id, latest_df)
 
-    prev_gamma = None
-    
-    results = []
-    sess_labels = []  # Track dominant state for each session for session-level transitions
-    sess_A = [[0.5, 0.5], [0.5, 0.5]]  # Initialize session-level transition matrix
-    historical_agg = {name: 0.0 for name in COMPONENT_NAMES}
-    total_st_weight = 0.0
-    p_capture_timeline = []
-    session_circadian = []
+    # ── Attempt to resume from the last checkpoint instead of replaying every
+    # ── session from scratch. See docs/DECISIONS.md "Incremental dashboard-
+    # ── replay checkpointing" for the full design rationale.
+    checkpoint_path = (
+        os.path.join(os.path.dirname(state_path), "dashboard_replay_checkpoint.json")
+        if state_path else None
+    )
+    checkpoint = load_replay_checkpoint(checkpoint_path)
 
-    for sess_id, s_df in session_list:
+    resume_from = 0
+    if checkpoint is not None:
+        cached_fingerprints = checkpoint["fingerprints"]
+        n_cached = len(cached_fingerprints)
+        if 0 < n_cached <= len(session_list):
+            still_valid = True
+            for i in range(n_cached):
+                _chk_sess_id, _chk_raw_df = session_list[i]
+                if _session_identity_fingerprint(_chk_raw_df) != cached_fingerprints[i]:
+                    still_valid = False  # an already-scored session's survey data changed -> full replay
+                    break
+            if still_valid:
+                resume_from = n_cached
+                model = checkpoint["model"]
+                baseline = checkpoint["baseline"]
+                detector = checkpoint["detector"]
+                scorer = checkpoint["scorer"]
+                prev_gamma = checkpoint["prev_gamma"]
+                results = list(checkpoint["results"])
+                sess_labels = list(checkpoint["sess_labels"])
+                historical_agg = dict(checkpoint["historical_agg"]) or {name: 0.0 for name in COMPONENT_NAMES}
+                total_st_weight = checkpoint["total_st_weight"]
+                p_capture_timeline = list(checkpoint["p_capture_timeline"])
+                session_circadian = list(checkpoint["session_circadian"])
+                # Re-apply preserved live-path signals on top of the checkpointed
+                # model/detector: run_inference_on_latest() can update alse_model_state.json's
+                # running_disagreement/regret_validator AFTER this checkpoint was last
+                # saved, and resuming instead of replaying must not lose that update.
+                if preserved_disagreement is not None:
+                    model.running_disagreement = preserved_disagreement
+                if preserved_regret_validator:
+                    detector.regret_validator = preserved_regret_validator
+
+    if resume_from == 0:
+        prev_gamma = None
+        results = []
+        sess_labels = []  # Track dominant state for each session for session-level transitions
+        historical_agg = {name: 0.0 for name in COMPONENT_NAMES}
+        total_st_weight = 0.0
+        p_capture_timeline = []
+        session_circadian = []
+
+    # Fully recomputed post-loop from sess_labels regardless of resume_from,
+    # so its initial value here never matters (see PRIOR_A blending below).
+    sess_A = [[0.5, 0.5], [0.5, 0.5]]
+    new_fingerprints = []  # fingerprints for sessions processed THIS call, appended to the cached prefix on save
+
+    for sess_id, s_df in session_list[resume_from:]:
         try:
+            raw_s_df = s_df  # pre-dedupe/pre-preprocess reference, used for fingerprinting
             s_df = dedupe_session_rows(s_df, sess_id)
             s_df = preprocess_session(s_df.copy())
             if len(s_df) < 2:
                 continue
-                
+
+            new_fingerprints.append(_session_identity_fingerprint(raw_s_df))
+
             gamma, blended_prob = model.process_session(s_df, baseline, detector, prev_gamma)
             doom_prob = blended_prob
             # Don't carry over extreme posterior if the gap before the NEXT session
@@ -2428,6 +2754,23 @@ def run_dashboard_payload(csv_data: str, state_path: str = None, survey_data: di
                 0.0,
                 1.0
             ))
+
+            # PILLAR 7 (Extended): Low-Evidence Suppression
+            # If the session is very short relative to the user's baseline and lacks
+            # significant behavioral evidence, cap the reported score below the threshold.
+            # This prevents 1-2 reel sessions from turning a low-activity day "Red" 
+            # in the calendar due to HMM state persistence or context alone.
+            is_explicitly_labeled = (
+                ('RegretScore' in s_df.columns and pd.notna(s_df['RegretScore'].iloc[0]) and float(s_df['RegretScore'].iloc[0]) > 0) or
+                # DelayedRegretScore is always 0 for new sessions (the delayed-regret survey
+                # feature was removed) but old CSV rows recorded before the removal can still
+                # carry a real value, so this still matters for historical data.
+                ('DelayedRegretScore' in s_df.columns and pd.notna(s_df['DelayedRegretScore'].iloc[0]) and float(s_df['DelayedRegretScore'].iloc[0]) > 0)
+            )
+            if not is_explicitly_labeled and behavior_evidence < 0.35 and _length_signal < 0.25:
+                # Force the reported score to a "Mindful" or "Stable" zone
+                S_t_reported = min(S_t_reported, DOOM_PROBABILITY_THRESHOLD - 0.1)
+
             scorer.update_weights(scorer_result['components'], blended_prob)
             
             # Historical Aggregation: Weight components by blended probability for stability
@@ -2476,7 +2819,7 @@ def run_dashboard_payload(csv_data: str, state_path: str = None, survey_data: di
                         session_end_dt += pd.Timedelta(days=1)
                     if pd.notna(session_start_dt) and pd.notna(session_end_dt):
                         session_duration_sec = max(0.0, float((session_end_dt - session_start_dt).total_seconds()))
-                        end_time_str = session_end_dt.strftime('%Y-%m-%dT%H:%M:%S')
+                        end_time_str = session_end_dt.strftime('%Y-%m-%d %H:%M:%S')
                     else:
                         end_time_str = str(s_df['EndTime'].iloc[-1])
                 except Exception:
@@ -2493,8 +2836,8 @@ def run_dashboard_payload(csv_data: str, state_path: str = None, survey_data: di
                 "avgDwell":            avg_dwell,
                 "timePeriod":          str(time_period),
                 "date":                str(date_str),
-                "startTime":           (lambda col: (lambda ts: ts.strftime('%Y-%m-%dT%H:%M') if (ts is not None and not pd.isna(ts) and ts.year > 1901) else "Unknown")(pd.to_datetime(col, dayfirst=False, errors='coerce')) if 'StartTime' in s_df.columns and pd.notna(s_df['StartTime'].iloc[0]) else "Unknown")(s_df['StartTime'].iloc[0]) if 'StartTime' in s_df.columns else "Unknown",
-                "endTime":             end_time_str,
+                "startTime":           (lambda col: (lambda ts: ts.strftime('%Y-%m-%d %H:%M:%S') if (ts is not None and not pd.isna(ts) and ts.year > 1901) else "Unknown")(pd.to_datetime(col, dayfirst=False, errors='coerce')) if 'StartTime' in s_df.columns and pd.notna(s_df['StartTime'].iloc[0]) else "Unknown")(s_df['StartTime'].iloc[0]) if 'StartTime' in s_df.columns else "Unknown",
+                "endTime":             (lambda col: (lambda ts: ts.strftime('%Y-%m-%d %H:%M:%S') if (ts is not None and not pd.isna(ts) and ts.year > 1901) else "Unknown")(pd.to_datetime(col, dayfirst=False, errors='coerce')) if 'EndTime' in s_df.columns and pd.notna(s_df['EndTime'].iloc[-1]) else end_time_str)(s_df['EndTime'].iloc[-1]) if 'EndTime' in s_df.columns else end_time_str,
                 "sessionDurationSec":  round(float(session_duration_sec), 3),
                 # Heuristic components for dashboard anatomy
                 "heuristic_score":      round(scorer_result.get('doom_score', 0.0), 4),
@@ -2529,43 +2872,6 @@ def run_dashboard_payload(csv_data: str, state_path: str = None, survey_data: di
             )
             base_obj["hasSurvey"] = base_has_survey
 
-            # Look for a retroactive label snapshot for this session, either by
-            # raw (SessionNum, StartTime date) or by (sessionNum, date) as seen
-            # in the cached HMM payload.
-            raw_key = (
-                str(base_obj["_rawSessionNum"] or ""),
-                str(base_obj["_rawStartTime"] or "")[:10]
-            )
-            logical_key = (
-                str(base_obj["sessionNum"] or ""),
-                str(base_obj["date"] or "")
-            )
-            retro_label = retroactive_label_map.get(raw_key) or retroactive_label_map.get(logical_key)
-
-            if isinstance(retro_label, dict):
-                # Overlay survey fields from the cached retroactive label so that
-                # dashboard payload is consistent immediately after labeling,
-                # even if the CSV mapping has not yet been updated.
-                for fld in [
-                    "postSessionRating",
-                    "regretScore",
-                    "moodBefore",
-                    "moodAfter",
-                    "intendedAction",
-                    "actualVsIntended",
-                    "comparativeRating",
-                    "delayedRegretScore",
-                ]:
-                    if fld in retro_label:
-                        base_obj[fld] = retro_label[fld]
-                base_obj["hasSurvey"] = bool(retro_label.get("hasSurvey", True))
-                base_obj["retroactiveLabel"] = True
-            else:
-                base_obj["retroactiveLabel"] = bool(
-                    retroactive_label_map.get(raw_key, False) or
-                    retroactive_label_map.get(logical_key, False)
-                )
-
             results.append(base_obj)
             
             p_capture_timeline.extend(gamma[:, 1].round(3).tolist())
@@ -2579,7 +2885,27 @@ def run_dashboard_payload(csv_data: str, state_path: str = None, survey_data: di
         except Exception as e:
             continue
 
+    # Persist the checkpoint now, covering every session (cached prefix + the
+    # ones just processed), so the NEXT call can resume from here instead of
+    # replaying from session 0 again.
+    if checkpoint_path:
+        all_fingerprints = (
+            (checkpoint["fingerprints"][:resume_from] if checkpoint is not None else [])
+            + new_fingerprints
+        )
+        save_replay_checkpoint(
+            checkpoint_path, model, baseline, detector, scorer, prev_gamma,
+            all_fingerprints, results, sess_labels, historical_agg,
+            total_st_weight, p_capture_timeline, session_circadian
+        )
+
     validate_model_soft(model, "run_dashboard_payload:replay")
+
+    _baseline_daily = max(
+        1.25,
+        float(baseline.n_sessions_seen / max(1, days_monitored_count)) if hasattr(baseline, 'n_sessions_seen') else 1.25
+    ) if 'days_monitored_count' in dir() else 1.25
+    _day_frequency_summary = apply_frequency_recurrence_to_results(results, _baseline_daily)
             
     # Normalize Historical Drivers
     if total_st_weight > 0:
@@ -2664,10 +2990,10 @@ def run_dashboard_payload(csv_data: str, state_path: str = None, survey_data: di
             "log_dwell":           float(model.feature_weights[0]),
             "log_speed":           float(model.feature_weights[1]),
             "rhythm_dissociation": float(model.feature_weights[2]),
-            "rewatch_flag":        float(model.feature_weights[3]),
+            "rewatch_intensity":   float(model.feature_weights[3]),
             "exit_flag":           float(model.feature_weights[4]),
-            "swipe_incomplete":    float(model.feature_weights[5]),
-            "speed_dwell_ratio":   float(model.feature_weights[6]) if len(model.feature_weights) > 6 else 0.0,
+            "dwell_pctile":        float(model.feature_weights[5]),
+            "scroll_interval_cv":  float(model.feature_weights[6]) if len(model.feature_weights) > 6 else 0.0,
         },
         "scorer_component_weights": {
             "session_length":      float(scorer.component_weights[0]),
@@ -2713,18 +3039,19 @@ def run_dashboard_payload(csv_data: str, state_path: str = None, survey_data: di
     # FIX-03 + FIX-13: Apply calibration + frequency risk to captureRiskScore
     _raw_st = float(results[-1]['S_t']) if results else 0.0
     _calibrated_st = apply_calibration(_raw_st)
-    _baseline_daily = max(5.0, float(baseline.n_sessions_seen / max(1, days_monitored_count)) if hasattr(baseline, 'n_sessions_seen') else 5.0) if 'days_monitored_count' in dir() else 5.0
-    _freq_risk = compute_frequency_risk(_sessions_today, _baseline_daily)
-    _final_capture = max(_calibrated_st, _calibrated_st * (1 + _freq_risk * 0.5))
+    _today_freq_risk = compute_frequency_risk(_sessions_today, _baseline_daily)
+    _final_capture = _calibrated_st
 
     output_payload.update({
         # Most-recent session's S_t on a 0-100 scale — used by header ring
         "captureRiskScore": round(_final_capture * 100, 1) if results else None,
         # Count of sessions tracked today — used by inactivity guard
         "sessionsToday": _sessions_today,
+        "todayFrequencyRisk": round(_today_freq_risk, 4),
         # Current idle duration (now − last session end); null if endTime unknown
         "idleSinceLastSessionMin": round(_idle_since_min, 1) if _idle_since_min is not None else None,
-        "weekly_summary": _compute_weekly_summary_from_detector(detector),
+        "weekly_summary": compute_weekly_summary_from_results(results) if results else _compute_weekly_summary_from_detector(detector),
+        "day_frequency_summary": _day_frequency_summary,
     })
 
     return json.dumps(output_payload)

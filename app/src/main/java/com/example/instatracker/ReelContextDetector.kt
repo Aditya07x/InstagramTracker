@@ -61,7 +61,7 @@ object ReelContextDetector {
             }
         }
 
-        return (hasFullscreenChild && hasPagerLikeContainer) || hasReelsLabel
+        return hasFullscreenChild && hasPagerLikeContainer && hasReelsLabel
     }
 
     fun extractReelScrollInfo(

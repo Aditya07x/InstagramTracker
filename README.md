@@ -380,9 +380,9 @@ Reelio presents a 3-step check-in after qualifying sessions (≥5 reels). The no
 
 A **Pre-Session Intention Probe** fires when you open Instagram after a gap >30 min, capturing `IntendedAction` which is later compared against actual session length to compute `ActualVsIntendedMatch`.
 
-A **Delayed Regret Probe** fires 1 hour after your session via `AlarmManager`, capturing retrospective regret that often differs from in-the-moment responses.
-
 Survey responses are stored in `SharedPreferences` and merged into the next CSV row at session end.
+
+> **Removed:** the 1-hour delayed regret probe and the retroactive survey feature (editing survey data for a past session at any time) were both removed. `DelayedRegretScore` remains a CSV column for backward compatibility with historical data but is now always written as `0`.
 
 ---
 
@@ -468,8 +468,6 @@ InstagramTracker/
 │   │   ├── DashboardActivity.kt            ← Dashboard cache validation + navigation
 │   │   ├── MicroProbeActivity.kt           ← Post-session 3-step survey UI
 │   │   ├── IntentionProbeActivity.kt       ← Pre-session intention capture
-│   │   ├── DelayedProbeActivity.kt         ← 1-hour post-session regret probe
-│   │   ├── DelayedProbeReceiver.kt         ← BroadcastReceiver for delayed alarm
 │   │   ├── PostSurveyReceiver.kt           ← BroadcastReceiver for post-session alarm
 │   │   ├── SettingsActivity.kt             ← App settings (survey rate, sleep hours, theme)
 │   │   ├── CSVExporter.kt                  ← CSV export handler
@@ -585,7 +583,6 @@ Then: `adb install app/build/outputs/apk/debug/app-debug.apk`
 - [x] 100-signal per-reel CSV recorder (Schema v5)
 - [x] React 18 WebView dashboard with 6 chart types
 - [x] 3-step post-session survey + pre-session intention probe
-- [x] Delayed regret probe (1hr post-session alarm)
 - [x] Weekly digest notification via WorkManager
 - [x] Settings screen (survey rate, sleep hours, theme)
 - [x] Multilingual interaction detection (EN/ES/FR)
