@@ -21,24 +21,3 @@ interface SessionDao {
     @Query("SELECT * FROM sessions ORDER BY sessionStart DESC LIMIT 1")
     fun getLastSession(): SessionEntity?
 }
-
-@Dao
-interface ReelDao {
-    @Insert
-    fun insert(reel: ReelEntity): Long
-
-    @Query("SELECT * FROM reels WHERE sessionId = :sessionId ORDER BY reelIndex ASC")
-    fun getReelsForSession(sessionId: String): List<ReelEntity>
-
-    @Query("SELECT * FROM reels")
-    fun getAll(): List<ReelEntity>
-
-    @androidx.room.Update
-    fun update(reel: ReelEntity)
-}
-
-@Dao
-interface ScrollDao {
-    @Insert
-    fun insert(event: ScrollEventEntity): Long
-}

@@ -16,6 +16,16 @@ object DatabaseProvider {
         }
     }
 
+    // reels/scroll_events were never written to (dead ReelEntity/ScrollEventEntity code path,
+    // superseded by the flat insta_data.csv). Dropping them here preserves sessions data instead
+    // of relying on fallbackToDestructiveMigration(), which would wipe the whole database.
+    val MIGRATION_2_3 = object : Migration(2, 3) {
+        override fun migrate(database: SupportSQLiteDatabase) {
+            database.execSQL("DROP TABLE IF EXISTS scroll_events")
+            database.execSQL("DROP TABLE IF EXISTS reels")
+        }
+    }
+
     fun getDatabase(context: Context): AppDatabase {
         return INSTANCE ?: synchronized(this) {
             val instance = Room.databaseBuilder(
@@ -23,7 +33,7 @@ object DatabaseProvider {
                 AppDatabase::class.java,
                 "insta_tracker.db"
             )
-            .addMigrations(MIGRATION_1_2)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
             .fallbackToDestructiveMigration()
             .build()
             INSTANCE = instance
