@@ -50,9 +50,9 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         const val LOCAL_ASSET_URL = "file:///android_asset/www/index.html"
-        // Remote dashboard for instant OTA updates (~20s K8s pipeline).
+        // Remote dashboard for instant OTA updates via Firebase Hosting.
         // Since React is static and data is injected via evaluateJavascript, privacy is 100% maintained.
-        const val DEFAULT_REMOTE_DASHBOARD_URL = "https://dashboard.reelio.app/index.html"
+        const val DEFAULT_REMOTE_DASHBOARD_URL = "https://reelio-web-20260312.web.app/index.html"
     }
 
     @SuppressLint("SetJavaScriptEnabled")

@@ -9,6 +9,11 @@ version: 2.1
 # ==============================================================================
 
 executors:
+  node-builder:
+    docker:
+      - image: cimg/node:20.11
+    resource_class: medium
+
   docker-builder:
     docker:
       - image: cimg/base:2024.01
@@ -79,7 +84,46 @@ jobs:
             fi
 
   # ────────────────────────────────────────────────────────────────────────────
-  # JOB 2: Build Signed Release APK & Upload to Firebase App Distribution
+  # JOB 2: Build React Dashboard & Deploy to Firebase Hosting
+  # ────────────────────────────────────────────────────────────────────────────
+  build-and-deploy-firebase-hosting:
+    executor: node-builder
+    steps:
+      - checkout
+      - run:
+          name: Install Dependencies
+          command: |
+            npm install -g esbuild@0.20.2 firebase-tools
+      - run:
+          name: Build Dashboard
+          command: |
+            mkdir -p firebase_public
+            cp -r app/src/main/assets/www/* firebase_public/
+            esbuild firebase_public/app.jsx \
+              --bundle \
+              --format=iife \
+              --target=es2018 \
+              --outfile=firebase_public/app.bundle.js \
+              --jsx-factory=React.createElement \
+              --jsx-fragment=React.Fragment
+      - run:
+          name: Deploy to Firebase Hosting
+          command: |
+            if [ -n "$FIREBASE_SERVICE_ACCOUNT_BASE64" ]; then
+              echo "Decoding Firebase Google Service Account JSON..."
+              echo "$FIREBASE_SERVICE_ACCOUNT_BASE64" | base64 -d > firebase_credentials.json
+              export GOOGLE_APPLICATION_CREDENTIALS="$(pwd)/firebase_credentials.json"
+            fi
+            
+            if [ -n "$GOOGLE_APPLICATION_CREDENTIALS" ] || [ -n "$FIREBASE_TOKEN" ]; then
+              echo "Deploying to Firebase Hosting..."
+              firebase deploy --only hosting --non-interactive
+            else
+              echo "Skipping Firebase upload: FIREBASE_SERVICE_ACCOUNT_BASE64 or FIREBASE_TOKEN not set."
+            fi
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # JOB 3: Build Signed Release APK & Upload to Firebase App Distribution
   # ────────────────────────────────────────────────────────────────────────────
   build-and-deploy-apk:
     executor: android-builder
@@ -149,6 +193,13 @@ workflows:
   dashboard-workflow:
     jobs:
       - build-and-push-dashboard:
+          filters:
+            branches:
+              only:
+                - main
+                - master
+                - /feature\/.*/
+      - build-and-deploy-firebase-hosting:
           filters:
             branches:
               only:
