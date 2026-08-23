@@ -49,34 +49,55 @@ const getState = s =>
             s >= 25 ? STATE.aware :
                 STATE.mindful;
 
-// ─── MOOD FACE — same minimal line-art style as CalendarScreen ───────────────
-// Each face: circle background + simple line-art eyes/mouth, no gradients.
+// ─── MOOD FACE — Origami 3D Faceted Paper Character ───────────────────────────
 const MoodFace = ({ score, size = 100 }) => {
-    const r = size / 2;
-    // Map score to face type
     const type = score >= 70 ? 'doom' : score >= 45 ? 'hooked' : score >= 25 ? 'aware' : 'mindful';
     const state = getState(score);
     const bg = state.accent;
     const ink = '#1A1612';
-
-    // Scale coordinates from a 100x100 viewBox
     const scale = size / 100;
 
     const faces = {
         mindful: (
             <g transform={`scale(${scale})`}>
-                <circle cx="35" cy="35" r="22" fill={bg} />
-                <circle cx="65" cy="35" r="22" fill={bg} />
-                <circle cx="35" cy="65" r="22" fill={bg} />
-                <circle cx="65" cy="65" r="22" fill={bg} />
-                <rect x="35" y="35" width="30" height="30" fill={bg} />
+                <defs>
+                    <linearGradient id="origamiMindfulGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                        <stop offset="0%" stopColor="#4BB882" />
+                        <stop offset="60%" stopColor="#3A9E6F" />
+                        <stop offset="100%" stopColor="#2E7E57" />
+                    </linearGradient>
+                </defs>
+                {/* Faceted Origami Mindful Circles */}
+                <circle cx="35" cy="35" r="22" fill="url(#origamiMindfulGrad)" />
+                <circle cx="65" cy="35" r="22" fill="url(#origamiMindfulGrad)" />
+                <circle cx="35" cy="65" r="22" fill="url(#origamiMindfulGrad)" />
+                <circle cx="65" cy="65" r="22" fill="url(#origamiMindfulGrad)" />
+                <rect x="35" y="35" width="30" height="30" fill="url(#origamiMindfulGrad)" />
+                {/* Fold Crease Facets */}
+                <polygon points="50,13 50,87 65,35" fill="rgba(255,255,255,0.18)" />
+                <polygon points="13,50 87,50 35,65" fill="rgba(0,0,0,0.12)" />
+                {/* Facial Features */}
                 <path d="M 32 48 Q 38 56 44 48 M 56 48 Q 62 56 68 48" stroke={ink} strokeWidth="4" strokeLinecap="round" fill="none" />
                 <path d="M 42 62 Q 50 70 58 62" stroke={ink} strokeWidth="4" strokeLinecap="round" fill="none" />
             </g>
         ),
         aware: (
             <g transform={`scale(${scale})`}>
-                <path d="M 50 15 L 85 32 L 85 68 L 50 85 L 15 68 L 15 32 Z" fill={bg} stroke={bg} strokeWidth="10" strokeLinejoin="round" />
+                <defs>
+                    <linearGradient id="origamiAwareGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                        <stop offset="0%" stopColor="#8357B8" />
+                        <stop offset="50%" stopColor="#6B3FA0" />
+                        <stop offset="100%" stopColor="#512A80" />
+                    </linearGradient>
+                </defs>
+                {/* Base Hexagon */}
+                <path d="M 50 15 L 85 32 L 85 68 L 50 85 L 15 68 L 15 32 Z" fill="url(#origamiAwareGrad)" stroke={bg} strokeWidth="4" strokeLinejoin="round" />
+                {/* Hexagon Origami Fold Facets */}
+                <polygon points="50,15 85,32 50,50" fill="rgba(255,255,255,0.22)" />
+                <polygon points="85,32 85,68 50,50" fill="rgba(0,0,0,0.08)" />
+                <polygon points="85,68 50,85 50,50" fill="rgba(0,0,0,0.16)" />
+                <polygon points="15,68 50,85 50,50" fill="rgba(255,255,255,0.1)" />
+                {/* Eyes */}
                 <circle cx="38" cy="50" r="14" fill="#FFF" />
                 <circle cx="62" cy="50" r="14" fill="#FFF" />
                 <circle cx="33" cy="50" r="5" fill={ink} />
@@ -85,14 +106,39 @@ const MoodFace = ({ score, size = 100 }) => {
         ),
         hooked: (
             <g transform={`scale(${scale})`}>
-                <path d="M 50 15 L 85 80 L 15 80 Z" fill={bg} stroke={bg} strokeWidth="12" strokeLinejoin="round" />
+                <defs>
+                    <linearGradient id="origamiHookedGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                        <stop offset="0%" stopColor="#D9AA48" />
+                        <stop offset="50%" stopColor="#C4973A" />
+                        <stop offset="100%" stopColor="#9C7524" />
+                    </linearGradient>
+                </defs>
+                {/* Triangle Base */}
+                <path d="M 50 15 L 85 80 L 15 80 Z" fill="url(#origamiHookedGrad)" stroke={bg} strokeWidth="6" strokeLinejoin="round" />
+                {/* Origami Pyramid Crease Facets */}
+                <polygon points="50,15 85,80 50,58" fill="rgba(255,255,255,0.24)" />
+                <polygon points="50,15 15,80 50,58" fill="rgba(0,0,0,0.14)" />
+                {/* Eyes and Mouth */}
                 <path d="M 32 55 L 43 60 L 32 65 M 68 55 L 57 60 L 68 65" stroke={ink} strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" fill="none" />
                 <line x1="45" y1="75" x2="55" y2="75" stroke={ink} strokeWidth="4" strokeLinecap="round" />
             </g>
         ),
         doom: (
             <g transform={`scale(${scale})`}>
-                <rect x="15" y="20" width="70" height="65" rx="16" fill={bg} />
+                <defs>
+                    <linearGradient id="origamiDoomGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                        <stop offset="0%" stopColor="#D86B50" />
+                        <stop offset="50%" stopColor="#C4563A" />
+                        <stop offset="100%" stopColor="#9E3B22" />
+                    </linearGradient>
+                </defs>
+                {/* Rounded Rect Base */}
+                <rect x="15" y="20" width="70" height="65" rx="16" fill="url(#origamiDoomGrad)" />
+                {/* Origami Box Fold Facets */}
+                <polygon points="15,20 85,20 50,52" fill="rgba(255,255,255,0.22)" />
+                <polygon points="85,20 85,85 50,52" fill="rgba(0,0,0,0.12)" />
+                <polygon points="15,85 85,85 50,52" fill="rgba(0,0,0,0.20)" />
+                {/* Eyes and Expression */}
                 <line x1="28" y1="42" x2="72" y2="42" stroke={ink} strokeWidth="5" strokeLinecap="round" />
                 <line x1="32" y1="50" x2="44" y2="50" stroke={ink} strokeWidth="4" strokeLinecap="round" />
                 <line x1="56" y1="50" x2="68" y2="50" stroke={ink} strokeWidth="4" strokeLinecap="round" />
@@ -139,18 +185,31 @@ function HeroBlock({ data }) {
 
     return (
         <div style={{
-            background: st.heroBg,
-            borderRadius: '0 0 44px 44px',
+            background: `linear-gradient(160deg, ${st.heroBg} 0%, #F9F6EE 100%)`,
+            borderRadius: '0 0 36px 36px',
             padding: '24px 24px 32px',
             position: 'relative',
             overflow: 'hidden',
+            boxShadow: '0 12px 28px -6px rgba(26,22,18,0.08), inset 0 -2px 0 rgba(0,0,0,0.04)',
+            borderBottom: '1px solid rgba(26,22,18,0.08)',
         }}>
+            {/* Origami Paper Fold Corner Accent */}
+            <div style={{
+                position: 'absolute', top: 0, right: 0,
+                width: 0, height: 0,
+                borderStyle: 'solid',
+                borderWidth: '0 24px 24px 0',
+                borderColor: `transparent ${st.accent}30 transparent transparent`,
+            }} />
+
             {/* State pill */}
             <div style={{
                 display: 'inline-flex',
-                background: `${st.accent}20`,
-                borderRadius: 999, padding: '5px 16px',
+                background: `linear-gradient(135deg, ${st.accent}25 0%, ${st.accent}12 100%)`,
+                border: `1px solid ${st.accent}40`,
+                borderRadius: 999, padding: '6px 18px',
                 marginBottom: 22,
+                boxShadow: '0 2px 6px rgba(0,0,0,0.03)',
             }}>
                 <span style={{
                     fontFamily: "'Space Grotesk', sans-serif",
@@ -190,11 +249,13 @@ function HeroBlock({ data }) {
                 {chips.map((chip, i) => (
                     <div key={i} style={{
                         whiteSpace: 'nowrap', flexShrink: 0,
-                        background: chip.dark ? `${st.accent}30` : `${st.accent}12`,
+                        background: chip.dark ? `linear-gradient(135deg, ${st.accent}35 0%, ${st.accent}20 100%)` : `linear-gradient(135deg, ${st.accent}18 0%, ${st.accent}08 100%)`,
+                        border: `1px solid ${st.accent}30`,
                         borderRadius: 999, padding: '7px 16px',
                         fontFamily: "'Nunito', sans-serif",
                         fontSize: 12, fontWeight: 800,
                         color: chip.dark ? st.accent : st.heroText,
+                        boxShadow: '0 2px 6px rgba(0,0,0,0.03)',
                     }}>{chip.t}</div>
                 ))}
             </div>

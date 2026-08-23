@@ -2,22 +2,33 @@ package com.example.instatracker.db
 
 import androidx.room.Dao
 import androidx.room.Insert
+import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Update
 
 @Dao
-interface SessionDao {
-    @Insert
-    fun insert(session: SessionEntity)
+interface CsvRowDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    fun insert(row: CsvRowEntity)
 
-    @Query("UPDATE sessions SET sessionEnd = :endTime WHERE sessionId = :sessionId")
-    fun updateEndTime(sessionId: String, endTime: Long)
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    fun insertAll(rows: List<CsvRowEntity>)
 
-    @Query("UPDATE sessions SET postSessionRating = :rating, regretScore = :regret, moodAfter = :focusAfter, actualVsIntendedMatch = :intentMatch, lastSessionDoomScore = :doomScore WHERE sessionId = :sessionId")
-    fun updateSurveyFields(sessionId: String, rating: Int, regret: Int, focusAfter: Int, intentMatch: Boolean, doomScore: Float)
+    @Query("SELECT * FROM csv_rows ORDER BY timestamp ASC")
+    fun getAllRows(): List<CsvRowEntity>
 
-    @Query("SELECT COUNT(*) FROM sessions WHERE date(sessionStart/1000, 'unixepoch') = date('now')")
-    fun sessionsToday(): Int
+    @Query("SELECT * FROM csv_rows WHERE sessionNumber = :sessionNum ORDER BY timestamp ASC")
+    fun getRowsForSession(sessionNum: Int): List<CsvRowEntity>
 
-    @Query("SELECT * FROM sessions ORDER BY sessionStart DESC LIMIT 1")
-    fun getLastSession(): SessionEntity?
+    @Update
+    fun updateAll(rows: List<CsvRowEntity>)
+
+    @Query("UPDATE csv_rows SET csvLine = :csvLine WHERE id = :id")
+    fun updateRow(id: String, csvLine: String)
+
+    @Query("DELETE FROM csv_rows")
+    fun deleteAll()
+
+    @Query("SELECT COUNT(*) FROM csv_rows")
+    fun getRowCount(): Int
 }

@@ -271,16 +271,16 @@ class MicroProbeActivity : Activity() {
                         val py = Python.getInstance()
                         val reelioModule = py.getModule("reelio_alse")
 
-                        val file = File(filesDir, "insta_data.csv")
-                        val cappedCsv = if (file.exists()) {
-                            val lines = file.readLines()
+                        val csvContent = DatabaseProvider.getCsvString(this@MicroProbeActivity)
+                        val cappedCsv = if (csvContent.isNotBlank()) {
+                            val lines = csvContent.lines()
                             if (lines.size > 2) {
                                 val header1 = lines[0]
                                 val header2 = lines[1]
-                                val dataLines = lines.drop(2)
+                                val dataLines = lines.drop(2).filter { it.isNotBlank() }
                                 (listOf(header1, header2) + dataLines.takeLast(200)).joinToString("\n")
                             } else {
-                                lines.joinToString("\n")
+                                csvContent
                             }
                         } else ""
 
@@ -317,19 +317,6 @@ class MicroProbeActivity : Activity() {
                     }
                 }
 
-                val db = DatabaseProvider.getDatabase(this)
-                if (sessionUuid != null) {
-                    db.sessionDao().updateSurveyFields(
-                        sessionId = sessionUuid,
-                        rating = postSessionRating,
-                        regret = regretScore,
-                        focusAfter = moodAfter,
-                        intentMatch = actualMatch == 1,
-                        doomScore = updatedDoomScore
-                    )
-                    Log.d("ALSE", "Retroactive DB update done for session=$sessionUuid")
-                }
-
                 val targetSessionNum = prefs.getInt("pending_survey_session_num", -1).toString()
                 retroactivelyUpdateCsv(targetSessionNum, actualMatch, prefs)
 
@@ -355,11 +342,16 @@ class MicroProbeActivity : Activity() {
     ) {
         synchronized(InstaAccessibilityService.GLOBAL_PYTHON_LOCK) {
             try {
-                val csvFile = File(filesDir, "insta_data.csv")
-                if (!csvFile.exists()) return
-                val lines = csvFile.readLines().toMutableList()
+                val db = DatabaseProvider.getDatabase(this)
+                val targetNum = targetSessionNum.toIntOrNull() ?: return
+                val rows = db.csvRowDao().getRowsForSession(targetNum)
+                if (rows.isEmpty()) return
+
+                val csvContent = DatabaseProvider.getCsvString(this)
+                val lines = csvContent.lines()
                 if (lines.size < 2) return
                 val header = lines[1].split(",")
+
                 val sessNumIdx       = header.indexOf("SessionNum")
                 val startTimeIdx     = header.indexOf("StartTime")
                 val postRatingIdx    = header.indexOf("PostSessionRating")
@@ -373,9 +365,9 @@ class MicroProbeActivity : Activity() {
 
                 val targetDatePrefix = (prefs.getString("pending_survey_session_date", "") ?: "").trim()
 
-                var updated = 0
-                for (i in 2 until lines.size) {
-                    val fields = lines[i].split(",").toMutableList()
+                val updatedRows = ArrayList<com.example.instatracker.db.CsvRowEntity>(rows.size)
+                for (row in rows) {
+                    val fields = row.csvLine.split(",").toMutableList()
                     if (fields.size <= sessNumIdx || fields.size <= startTimeIdx) continue
                     if (fields[sessNumIdx].trim() != targetSessionNum) continue
 
@@ -389,20 +381,17 @@ class MicroProbeActivity : Activity() {
                     if (moodBeforeIdx in 0 until fields.size && moodBefore > 0) fields[moodBeforeIdx] = moodBefore.toString()
                     if (moodAfterIdx in 0 until fields.size) fields[moodAfterIdx]  = moodAfter.toString()
                     if (comparativeIdx in 0 until fields.size) fields[comparativeIdx] = comparativeRating.toString()
-                    lines[i] = fields.joinToString(",")
-                    updated++
+
+                    updatedRows.add(row.copy(csvLine = fields.joinToString(",")))
                 }
-                if (updated > 0) {
-                    val tmpCsv = File(filesDir, "insta_data.csv.tmp")
-                    tmpCsv.writeText(lines.joinToString("\n") + "\n")
-                    if (tmpCsv.renameTo(csvFile)) {
-                        Log.d("ALSE", "Retroactive CSV update: Updated $updated rows. Atomic patch persisted.")
-                    } else {
-                        Log.e("ALSE", "Atomic CSV rename failed! Data not persisted.")
-                    }
+
+                if (updatedRows.isNotEmpty()) {
+                    // Anti-N+1: Update all affected rows in a single batch transaction
+                    db.csvRowDao().updateAll(updatedRows)
+                    Log.d("ALSE", "Retroactive DB update: Updated ${updatedRows.size} rows in SQLite.")
                 }
             } catch (t: Throwable) {
-                Log.e("ALSE", "Retroactive CSV update failed: ${t.message}")
+                Log.e("ALSE", "Retroactive DB update failed: ${t.message}")
             }
             Unit
         }

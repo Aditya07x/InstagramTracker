@@ -7,6 +7,10 @@ import android.widget.SeekBar
 import android.widget.Switch
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import java.io.File
 
 class SettingsActivity : AppCompatActivity() {
     private lateinit var prefs: PreferencesHelper
@@ -180,8 +184,16 @@ class SettingsActivity : AppCompatActivity() {
                     .setTitle("Clear All Data?")
                     .setMessage("This will delete all sessions, preferences, and streak data. This cannot be undone.")
                     .setPositiveButton("Clear") { _, _ ->
-                        prefs.clearAllData()
-                        finish()
+                        CoroutineScope(Dispatchers.IO).launch {
+                            DatabaseProvider.getDatabase(this@SettingsActivity).csvRowDao().deleteAll()
+                            listOf("insta_data.csv", "insta_data.csv.migrated", "alse_model_state.json", "hmm_results.json")
+                                .forEach { name -> File(filesDir, name).takeIf { it.exists() }?.delete() }
+                            
+                            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                                prefs.clearAllData()
+                                finish()
+                            }
+                        }
                     }
                     .setNegativeButton("Cancel", null)
                     .show()
