@@ -59,6 +59,11 @@ android {
             configure<com.google.firebase.appdistribution.gradle.AppDistributionExtension> {
                 appId = "1:139920054733:android:2d885a6bebeb65aa0a4c84"
                 artifactType = "APK"
+                val credsEnv = System.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+                val credsFile = if (!credsEnv.isNullOrBlank()) File(credsEnv) else rootProject.file("firebase_credentials.json")
+                if (credsFile.exists()) {
+                    serviceCredentialsFile = credsFile.absolutePath
+                }
                 testers = System.getenv("FIREBASE_TESTERS") ?: "testers"
                 releaseNotes = System.getenv("RELEASE_NOTES") ?: "Automated build from CircleCI"
             }
