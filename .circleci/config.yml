@@ -130,6 +130,8 @@ jobs:
               --outfile=firebase_public/app.bundle.js \
               --jsx-factory=React.createElement \
               --jsx-fragment=React.Fragment
+            # Inject commit SHA query parameter to app.bundle.js in index.html for guaranteed zero-cache OTA updates
+            sed -i "s/app\.bundle\.js/app.bundle.js?v=${CIRCLE_SHA1}/g" firebase_public/index.html
       - run:
           name: Security Check - Bundle Size & Bridge Calls
           command: |
