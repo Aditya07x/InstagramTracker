@@ -11,7 +11,7 @@ version: 2.1
 executors:
   node-builder:
     docker:
-      - image: cimg/node:20.11
+      - image: cimg/node:22.2
     resource_class: medium
 
   docker-builder:
@@ -93,7 +93,7 @@ jobs:
       - run:
           name: Install Dependencies
           command: |
-            npm install -g esbuild@0.20.2 firebase-tools
+            sudo npm install -g esbuild@0.20.2 firebase-tools
       - run:
           name: Build Dashboard
           command: |
