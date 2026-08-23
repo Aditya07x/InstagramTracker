@@ -1,18 +1,46 @@
-﻿*.iml
-.gradle
+# Gradle & Android Build Caches
+*.iml
+.gradle/
+.gradle-codex/
 /local.properties
-/.idea/caches
-/.idea/libraries
-/.idea/modules.xml
-/.idea/workspace.xml
-/.idea/navEditor.xml
-/.idea/assetWizardSettings.xml
+local.properties
 .DS_Store
 /build
 /captures
 .externalNativeBuild
 .cxx
-local.properties
-app/build
-app/src/main/assets/www/*.bak
+app/build/
+app/release/
 
+# IDE Configuration
+.idea/
+.vscode/
+.kotlin/
+
+# Python & Chaquopy Caches
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Temporary Logs & Debug Reports
+*.log
+build_*.txt
+build_*.log
+bugreport.zip
+temp_*.json
+debug_*.json
+app/src/main/assets/www/*.bak
+app/src/main/assets/www/log.txt
+
+# Large Datasets & Synthetic Validation Dumps
+*.csv
+Analysis_Data/
+test_data/
+synthetic_validation_*/
+
+# Keystores & Release Secrets
+*.jks
+*.keystore
+*.key
+signing.properties

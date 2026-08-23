@@ -24,9 +24,33 @@ android {
         }
     }
 
+    signingConfigs {
+        create("release") {
+            val keystorePath = System.getenv("KEYSTORE_PATH") ?: "release.keystore"
+            val keystoreFile = file(keystorePath)
+            if (keystoreFile.exists()) {
+                storeFile = keystoreFile
+                storePassword = System.getenv("KEYSTORE_PASSWORD") ?: "android"
+                keyAlias = System.getenv("KEY_ALIAS") ?: "reelio"
+                keyPassword = System.getenv("KEY_PASSWORD") ?: "android"
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            val releaseKeystore = file(System.getenv("KEYSTORE_PATH") ?: "release.keystore")
+            if (releaseKeystore.exists()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+
+            configure<com.google.firebase.appdistribution.gradle.AppDistributionExtension> {
+                appId = "1:139920054733:android:2d885a6bebeb65aa0a4c84"
+                artifactType = "APK"
+                testers = System.getenv("FIREBASE_TESTERS") ?: "testers"
+                releaseNotes = System.getenv("RELEASE_NOTES") ?: "Automated build from CircleCI"
+            }
         }
     }
 

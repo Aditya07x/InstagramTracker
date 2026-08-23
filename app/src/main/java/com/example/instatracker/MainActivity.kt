@@ -48,6 +48,13 @@ class MainActivity : ComponentActivity() {
     @Volatile private var pendingInjectionRequest = false
     private lateinit var webView: WebView
 
+    companion object {
+        const val LOCAL_ASSET_URL = "file:///android_asset/www/index.html"
+        // Default remote dashboard URL (10.0.2.2 is the Android Emulator's alias to host 127.0.0.1)
+        // For physical devices on Wi-Fi, this can be set to http://<YOUR_PC_LAN_IP>:8080/index.html via SharedPreferences
+        const val DEFAULT_REMOTE_DASHBOARD_URL = "http://10.0.2.2:8080/index.html"
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -111,6 +118,9 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        val prefs = getSharedPreferences("InstaTrackerPrefs", Context.MODE_PRIVATE)
+        val targetDashboardUrl = prefs.getString("remote_dashboard_url", DEFAULT_REMOTE_DASHBOARD_URL) ?: DEFAULT_REMOTE_DASHBOARD_URL
+
         webView.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
@@ -127,11 +137,17 @@ class MainActivity : ComponentActivity() {
 
             override fun onReceivedError(view: WebView?, request: android.webkit.WebResourceRequest?, error: android.webkit.WebResourceError?) {
                 super.onReceivedError(view, request, error)
-                Log.e("ReactDashboard", "WebView Error: ${error?.description}")
+                Log.e("ReactDashboard", "WebView Error: ${error?.description} on url: ${request?.url}")
+                // If the remote dashboard is unreachable (offline, bad IP, container stopped),
+                // degrade seamlessly to the local bundled asset without disrupting user experience.
+                if (request?.isForMainFrame == true && view?.url != LOCAL_ASSET_URL) {
+                    Log.w("ReactDashboard", "Remote dashboard unreachable. Falling back seamlessly to local bundled assets.")
+                    view?.loadUrl(LOCAL_ASSET_URL)
+                }
             }
         }
 
-        webView.loadUrl("file:///android_asset/www/index.html")
+        webView.loadUrl(targetDashboardUrl)
 
         // Schedule weekly notification worker (runs every 7 days at 9 AM)
         scheduleWeeklyNotificationWorker()
@@ -186,7 +202,7 @@ class MainActivity : ComponentActivity() {
             // Ensure we aren't showing a blank page if it failed to load earlier
             if (webView.url == null || webView.url == "about:blank") {
                 Log.w("ReactDashboard", "WebView URL is null or blank on resume, reloading...")
-                webView.loadUrl("file:///android_asset/www/index.html")
+                webView.loadUrl(LOCAL_ASSET_URL)
             } else {
                 // Background refresh with latest data
                 if (isVivoFamilyDevice() && usedCachedPayload) {
@@ -229,19 +245,9 @@ class MainActivity : ComponentActivity() {
             
             executorService.execute {
                 try {
-                    val file = File(filesDir, "insta_data.csv")
-                    var csvContent = ""
+                    val csvContent = DatabaseProvider.getCsvString(this@MainActivity)
                     
-                    if (file.exists()) {
-                        csvContent = file.readText()
-                    } else {
-                        handler.post {
-                            injectErrorToReact(webView, "No data file found. Please scroll some reels first!")
-                        }
-                        return@execute
-                    }
-
-                    if (csvContent.isEmpty()) {
+                    if (csvContent.isBlank()) {
                         handler.post {
                             injectErrorToReact(webView, "No data available yet. Scroll a few more reels!")
                         }
@@ -473,17 +479,23 @@ class MainActivity : ComponentActivity() {
 
         @JavascriptInterface
         fun exportCsv() {
-            handler.post {
-                val file = File(filesDir, "insta_data.csv")
-                if (!file.exists()) return@post
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    val csvContent = DatabaseProvider.getCsvString(mContext)
+                    if (csvContent.isBlank()) return@launch
 
-                val uri: Uri = FileProvider.getUriForFile(mContext, "${packageName}.fileprovider", file)
-                val intent = Intent(Intent.ACTION_SEND).apply {
-                    type = "text/csv"
-                    putExtra(Intent.EXTRA_STREAM, uri as android.os.Parcelable)
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    val tempFile = File(cacheDir, "export.csv")
+                    tempFile.writeText(csvContent)
+                    val uri: Uri = FileProvider.getUriForFile(mContext, "${packageName}.fileprovider", tempFile)
+                    val intent = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/csv"
+                        putExtra(Intent.EXTRA_STREAM, uri as android.os.Parcelable)
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    mContext.startActivity(Intent.createChooser(intent, "Share Behavioral Baseline Data"))
+                } catch (e: Exception) {
+                    Log.e("ReactDashboard", "Error exporting CSV: ${e.message}", e)
                 }
-                startActivity(Intent.createChooser(intent, "Share Behavioral Baseline Data"))
             }
         }
 
@@ -491,8 +503,7 @@ class MainActivity : ComponentActivity() {
          * Prompts the user to confirm and clear stored behavioral event data.
          *
          * Exposed to JavaScript via the WebView interface. Shows a confirmation dialog; if the user confirms,
-         * deletes the file "insta_data.csv" from the app's files directory and triggers a refresh of the WebView
-         * to update the UI.
+         * deletes all rows from SQLite and temporary model state files, then triggers a refresh.
          */
         @JavascriptInterface
         fun clearData() {
@@ -502,10 +513,15 @@ class MainActivity : ComponentActivity() {
                     .setTitle("Clear Behavioral Data")
                     .setMessage("Are you sure you want to permanently delete all tracked UI events? The behavioral model will reset.")
                     .setPositiveButton("Delete Data") { _, _ ->
-                        listOf("insta_data.csv", "alse_model_state.json", "hmm_results.json")
-                            .forEach { name -> File(filesDir, name).takeIf { it.exists() }?.delete() }
-                        // Force a refresh of the webview
-                        injectDataWithDebounce(webView)
+                        CoroutineScope(Dispatchers.IO).launch {
+                            DatabaseProvider.getDatabase(mContext).csvRowDao().deleteAll()
+                            listOf("insta_data.csv", "insta_data.csv.migrated", "alse_model_state.json", "hmm_results.json")
+                                .forEach { name -> File(filesDir, name).takeIf { it.exists() }?.delete() }
+                            handler.post {
+                                // Force a refresh of the webview
+                                injectDataWithDebounce(webView)
+                            }
+                        }
                     }
                     .setNeutralButton("Cancel", null)
                     .show()
@@ -649,19 +665,19 @@ class MainActivity : ComponentActivity() {
                         synchronized(InstaAccessibilityService.GLOBAL_PYTHON_LOCK) {
                             android.util.Log.i("ReelioDiag", "MainActivity acquired PYTHON_LOCK (report_payload). waited=${System.currentTimeMillis() - mainLockWait2}ms")
                             
+                            val csvContent = DatabaseProvider.getCsvString(mContext)
+                            if (csvContent.isBlank())
+                                return@withContext "{\"error\": \"No session data found. Scroll some Reels first!\"}"
+                            
                             val jsonFile = File(filesDir, "hmm_results.json")
-                            val csvFile = File(filesDir, "insta_data.csv")
                             val jsonContent = when {
-                                jsonFile.exists() && jsonFile.length() > 10 && isCacheValid(jsonFile, csvFile) -> jsonFile.readText()
+                                jsonFile.exists() && jsonFile.length() > 10 -> jsonFile.readText()
                                 else -> {
-                                    // Fallback: run dashboard first to build json
-                                    if (!csvFile.exists() || csvFile.length() < 10)
-                                        return@withContext "{\"error\": \"No session data found. Scroll some Reels first!\"}"
                                     if (!Python.isStarted()) Python.start(AndroidPlatform(mContext))
                                     val py = Python.getInstance()
                                     val mod = py.getModule("reelio_alse")
                                     val statePath = File(filesDir, "alse_model_state.json").absolutePath
-                                    val freshJson = mod.callAttr("run_dashboard_payload", csvFile.readText(), statePath).toString()
+                                    val freshJson = mod.callAttr("run_dashboard_payload", csvContent, statePath).toString()
                                     jsonFile.writeText(freshJson)
                                     freshJson
                                 }
@@ -670,8 +686,6 @@ class MainActivity : ComponentActivity() {
                             if (!Python.isStarted()) Python.start(AndroidPlatform(mContext))
                             val py = Python.getInstance()
                             val alseModule = py.getModule("reelio_alse")
-                            // Pass both json and csv — csv needed for dates, times, top driver
-                            val csvContent = if (csvFile.exists()) csvFile.readText() else ""
                             val resultStr = alseModule.callAttr("run_report_payload", jsonContent, csvContent).toString()
                             android.util.Log.i("ReelioDiag", "MainActivity releasing PYTHON_LOCK (report_payload). time=${System.currentTimeMillis()}")
                             resultStr

@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: reelio-dashboard-service
+  labels:
+    app: reelio-dashboard
+spec:
+  # NodePort opens a dedicated port (30080) on the host machine/node
+  # so that external devices (like your physical Android phone on Wi-Fi) can access the service directly
+  type: NodePort
+  
+  # Selector: The service finds all pods labeled `app: reelio-dashboard` and load-balances incoming traffic across them
+  selector:
+    app: reelio-dashboard
+
+  ports:
+    - protocol: TCP
+      port: 80           # Port exposed inside the Kubernetes cluster (ClusterIP)
+      targetPort: 80     # Port that Nginx listens to inside the container
+      nodePort: 30080    # Static port exposed externally on the host (minikube/node IP:30080)
