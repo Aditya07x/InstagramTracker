@@ -26,8 +26,13 @@ android {
 
     signingConfigs {
         create("release") {
-            val keystorePath = System.getenv("KEYSTORE_PATH") ?: "release.keystore"
-            val keystoreFile = file(keystorePath)
+            val envPath = System.getenv("KEYSTORE_PATH")
+            val keystoreFile = if (!envPath.isNullOrBlank()) {
+                val f = File(envPath)
+                if (f.isAbsolute) f else rootProject.file(envPath)
+            } else {
+                file("release.keystore")
+            }
             if (keystoreFile.exists()) {
                 storeFile = keystoreFile
                 storePassword = System.getenv("KEYSTORE_PASSWORD") ?: "android"
@@ -40,8 +45,14 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
-            val releaseKeystore = file(System.getenv("KEYSTORE_PATH") ?: "release.keystore")
-            if (releaseKeystore.exists()) {
+            val envPath = System.getenv("KEYSTORE_PATH")
+            val keystoreFile = if (!envPath.isNullOrBlank()) {
+                val f = File(envPath)
+                if (f.isAbsolute) f else rootProject.file(envPath)
+            } else {
+                file("release.keystore")
+            }
+            if (keystoreFile.exists()) {
                 signingConfig = signingConfigs.getByName("release")
             }
 

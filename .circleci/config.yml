@@ -91,12 +91,17 @@ jobs:
           key: v1-gradle-{{ checksum "build.gradle.kts" }}-{{ checksum "app/build.gradle.kts" }}-{{ checksum "gradle/libs.versions.toml" }}
 
       - run:
+          name: Ensure Build Dependencies for Chaquopy
+          command: |
+            python3 --version || (sudo apt-get update && sudo apt-get install -y python3 python3-pip python3-venv)
+
+      - run:
           name: Decode Keystore and Secrets
           command: |
             if [ -n "$KEYSTORE_BASE64" ]; then
               echo "Decoding release keystore..."
               echo "$KEYSTORE_BASE64" | base64 -d > app/release.keystore
-              export KEYSTORE_PATH="app/release.keystore"
+              echo 'export KEYSTORE_PATH="app/release.keystore"' >> "$BASH_ENV"
             else
               echo "No KEYSTORE_BASE64 provided. Gradle will assemble unsigned/debug APK."
             fi
@@ -104,7 +109,7 @@ jobs:
             if [ -n "$FIREBASE_SERVICE_ACCOUNT_BASE64" ]; then
               echo "Decoding Firebase Google Service Account JSON..."
               echo "$FIREBASE_SERVICE_ACCOUNT_BASE64" | base64 -d > firebase_credentials.json
-              export GOOGLE_APPLICATION_CREDENTIALS="$(pwd)/firebase_credentials.json"
+              echo "export GOOGLE_APPLICATION_CREDENTIALS=\"$(pwd)/firebase_credentials.json\"" >> "$BASH_ENV"
             fi
 
       - run:
