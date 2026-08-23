@@ -50,9 +50,9 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         const val LOCAL_ASSET_URL = "file:///android_asset/www/index.html"
-        // Default remote dashboard URL (10.0.2.2 is the Android Emulator's alias to host 127.0.0.1)
-        // For physical devices on Wi-Fi, this can be set to http://<YOUR_PC_LAN_IP>:8080/index.html via SharedPreferences
-        const val DEFAULT_REMOTE_DASHBOARD_URL = "http://10.0.2.2:8080/index.html"
+        // Default to the bundled local asset to avoid 20-second TCP timeouts on physical devices.
+        // For local development, this can be set to http://<YOUR_PC_LAN_IP>:8080/index.html via SharedPreferences.
+        const val DEFAULT_REMOTE_DASHBOARD_URL = LOCAL_ASSET_URL
     }
 
     @SuppressLint("SetJavaScriptEnabled")
