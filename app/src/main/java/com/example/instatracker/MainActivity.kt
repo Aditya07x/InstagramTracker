@@ -50,9 +50,9 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         const val LOCAL_ASSET_URL = "file:///android_asset/www/index.html"
-        // Default to the bundled local asset to avoid 20-second TCP timeouts on physical devices.
-        // For local development, this can be set to http://<YOUR_PC_LAN_IP>:8080/index.html via SharedPreferences.
-        const val DEFAULT_REMOTE_DASHBOARD_URL = LOCAL_ASSET_URL
+        // Remote dashboard for instant OTA updates (~20s K8s pipeline).
+        // Since React is static and data is injected via evaluateJavascript, privacy is 100% maintained.
+        const val DEFAULT_REMOTE_DASHBOARD_URL = "https://dashboard.reelio.app/index.html"
     }
 
     @SuppressLint("SetJavaScriptEnabled")
