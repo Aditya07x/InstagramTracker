@@ -394,7 +394,6 @@ function OnboardingState({ onContinue }) {
                     lineHeight: 1.12, letterSpacing: "-0.02em",
                     color: "#1A1612",
                 }}>
-                    meet<br />
                     <em style={{ fontStyle: "italic", fontWeight: 400 }}>your personal Instagram scroll tracker.</em>
                 </div>
             </div>
