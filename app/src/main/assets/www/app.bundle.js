@@ -625,13 +625,15 @@
   var safeArr = (v) => Array.isArray(v) ? v : [];
   var averageOf = (vals) => {
     const nums = safeArr(vals).filter(isFiniteNumber);
-    if (!nums.length) return null;
+    if (!nums.length)
+      return null;
     return nums.reduce((acc, n) => acc + n, 0) / nums.length;
   };
   var sumOf = (vals) => safeArr(vals).filter(isFiniteNumber).reduce((acc, n) => acc + n, 0);
   var formatHour = (hour) => `${String((hour + 24) % 24).padStart(2, "0")}:00`;
   var formatHourWindow = (hour, span = 2) => {
-    if (!isFiniteNumber(hour)) return null;
+    if (!isFiniteNumber(hour))
+      return null;
     const h = (Math.round(hour) % 24 + 24) % 24;
     const end = (h + span) % 24;
     return `${formatHour(h)}-${formatHour(end)}`;
@@ -640,7 +642,8 @@
     const startRaw = session == null ? void 0 : session.startTime;
     if (typeof startRaw === "string" && startRaw && startRaw !== "Unknown") {
       const match = startRaw.match(/^(\d{4}-\d{2}-\d{2})[T\s]/);
-      if (match) return match[1];
+      if (match)
+        return match[1];
       const dt = new Date(startRaw);
       if (!Number.isNaN(dt.getTime())) {
         const y = dt.getFullYear();
@@ -650,7 +653,8 @@
       }
     }
     const dateRaw = String((session == null ? void 0 : session.date) || "").trim();
-    if (/^\d{4}-\d{2}-\d{2}$/.test(dateRaw)) return dateRaw;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(dateRaw))
+      return dateRaw;
     if (/^\d{2}-\d{2}$/.test(dateRaw)) {
       const year = (/* @__PURE__ */ new Date()).getFullYear();
       return `${year}-${dateRaw}`;
@@ -661,14 +665,16 @@
     const startRaw = session == null ? void 0 : session.startTime;
     if (typeof startRaw === "string" && startRaw && startRaw !== "Unknown") {
       const ms = Date.parse(startRaw);
-      if (!Number.isNaN(ms)) return ms;
+      if (!Number.isNaN(ms))
+        return ms;
     }
     return null;
   };
   var deriveSessionDurationSec = (session) => {
     var _a, _b;
     const explicitSec = (_b = (_a = maybeNum(session == null ? void 0 : session.durationSec)) != null ? _a : maybeNum(session == null ? void 0 : session.sessionDurationSec)) != null ? _b : maybeNum(session == null ? void 0 : session.totalDurationSec);
-    if (isFiniteNumber(explicitSec) && explicitSec > 0) return explicitSec;
+    if (isFiniteNumber(explicitSec) && explicitSec > 0)
+      return explicitSec;
     const reels = maybeNum(session == null ? void 0 : session.nReels);
     const dwell = maybeNum(session == null ? void 0 : session.avgDwell);
     if (isFiniteNumber(reels) && reels > 0 && isFiniteNumber(dwell) && dwell > 0) {
@@ -678,35 +684,45 @@
   };
   var formatMin = (min) => {
     const m = safeNum(min, 0);
-    if (m < 1) return `${Math.round(m * 60)}s`;
+    if (m < 1)
+      return `${Math.round(m * 60)}s`;
     const hh = Math.floor(m / 60);
     const mm = Math.floor(m % 60);
-    if (hh > 0) return `${hh}h ${mm}m`;
+    if (hh > 0)
+      return `${hh}h ${mm}m`;
     return `${mm}m`;
   };
   var formatDurationSec = (sec) => {
     const s = Math.round(safeNum(sec, 0));
     const m = Math.floor(s / 60);
     const r = s % 60;
-    if (m > 0) return `${m}m ${r}s`;
+    if (m > 0)
+      return `${m}m ${r}s`;
     return `${r}s`;
   };
   var parseActiveTimeSeconds = (str, fallback = 0) => {
-    if (typeof str !== "string" || !str.trim()) return fallback;
+    if (typeof str !== "string" || !str.trim())
+      return fallback;
     let total = 0;
     const m = str.match(/(\d+)m/);
     const s = str.match(/(\d+)s/);
     const h = str.match(/(\d+)h/);
-    if (h) total += parseInt(h[1], 10) * 3600;
-    if (m) total += parseInt(m[1], 10) * 60;
-    if (s) total += parseInt(s[1], 10);
+    if (h)
+      total += parseInt(h[1], 10) * 3600;
+    if (m)
+      total += parseInt(m[1], 10) * 60;
+    if (s)
+      total += parseInt(s[1], 10);
     return total || fallback;
   };
   var getRiskMeta = (score) => {
     const s = safeNum(score, 0);
-    if (s >= 70) return { label: "PAUSE & REFLECT", color: D.blushDark, hint: "A gentle break can refresh your mind" };
-    if (s >= 45) return { label: "BUILDING MINDFULNESS", color: D.peachDark, hint: "Notice how your focus feels right now" };
-    if (s >= 25) return { label: "PEACEFUL FLOW", color: D.powderBlueDark, hint: "You're keeping a gentle, steady pace" };
+    if (s >= 70)
+      return { label: "PAUSE & REFLECT", color: D.blushDark, hint: "A gentle break can refresh your mind" };
+    if (s >= 45)
+      return { label: "BUILDING MINDFULNESS", color: D.peachDark, hint: "Notice how your focus feels right now" };
+    if (s >= 25)
+      return { label: "PEACEFUL FLOW", color: D.powderBlueDark, hint: "You're keeping a gentle, steady pace" };
     return { label: "MINDFUL CALM", color: D.sageDark, hint: "Lovely focus and balance today" };
   };
   function getHeroSummary(data) {
@@ -758,7 +774,8 @@
       const tick = (now) => {
         const p = Math.min(1, (now - start) / duration);
         setValue(Math.round(target * p));
-        if (p < 1) raf = requestAnimationFrame(tick);
+        if (p < 1)
+          raf = requestAnimationFrame(tick);
       };
       raf = requestAnimationFrame(tick);
       return () => cancelAnimationFrame(raf);
@@ -871,8 +888,10 @@
       chips.push({ t: `${mindfulStreak} mindful in a row`, dark: false });
     if (isFiniteNumber(score) && isFiniteNumber(avg)) {
       const d = score - avg;
-      if (d > 8) chips.push({ t: `\u2191 Higher risk than usual`, dark: true });
-      if (d < -8) chips.push({ t: `\u2193 Calmer than usual`, dark: false });
+      if (d > 8)
+        chips.push({ t: `\u2191 Higher risk than usual`, dark: true });
+      if (d < -8)
+        chips.push({ t: `\u2193 Calmer than usual`, dark: false });
     }
     const lines = st.headline.split("\n");
     return /* @__PURE__ */ React.createElement("div", { style: {
@@ -1017,9 +1036,12 @@
       marginTop: 6
     } }, "Sessions"), (() => {
       const diff = isFiniteNumber(sessions) && isFiniteNumber(avgSessions) ? sessions - avgSessions : null;
-      if (!isFiniteNumber(diff)) return null;
-      if (diff > 0.5) return /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "'Nunito', sans-serif", fontSize: 11, fontWeight: 800, color: "#A03A25", marginTop: 4 } }, "more than usual");
-      if (diff < -0.5) return /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "'Nunito', sans-serif", fontSize: 11, fontWeight: 800, color: "#6A5E56", marginTop: 4 } }, "less than usual");
+      if (!isFiniteNumber(diff))
+        return null;
+      if (diff > 0.5)
+        return /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "'Nunito', sans-serif", fontSize: 11, fontWeight: 800, color: "#A03A25", marginTop: 4 } }, "more than usual");
+      if (diff < -0.5)
+        return /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "'Nunito', sans-serif", fontSize: 11, fontWeight: 800, color: "#6A5E56", marginTop: 4 } }, "less than usual");
       return null;
     })()), /* @__PURE__ */ React.createElement("div", { style: {
       background: "#EEE9F5",
@@ -1043,11 +1065,14 @@
     const lastRates = safeArr(data.last3SessionAutopilotRates).filter(isFiniteNumber);
     const outOf10 = isFiniteNumber(rate) ? Math.round(rate / 10) : null;
     const trendInfo = (() => {
-      if (lastRates.length < 3) return null;
+      if (lastRates.length < 3)
+        return null;
       const recent = lastRates.slice(-3);
       const delta = recent[2] - recent[0];
-      if (delta <= -0.08) return { text: "improving last 3 sessions", color: "#2A7A54", bg: "#EAF3EE" };
-      if (delta >= 0.08) return { text: "escalating last 3 sessions", color: "#A03A25", bg: "#F5EDE9" };
+      if (delta <= -0.08)
+        return { text: "improving last 3 sessions", color: "#2A7A54", bg: "#EAF3EE" };
+      if (delta >= 0.08)
+        return { text: "escalating last 3 sessions", color: "#A03A25", bg: "#F5EDE9" };
       return { text: "steady across last 3 sessions", color: "#6A5E56", bg: "#F4EFE8" };
     })();
     const accent = !isFiniteNumber(rate) ? "#6B3FA0" : rate >= 70 ? "#C4563A" : rate >= 40 ? "#C4973A" : "#3A9E6F";
@@ -1113,7 +1138,8 @@
       const step = (now) => {
         const p = Math.min(1, (now - start) / 700);
         setDisp(Math.round(target * ease(p)));
-        if (p < 1) raf = requestAnimationFrame(step);
+        if (p < 1)
+          raf = requestAnimationFrame(step);
       };
       raf = requestAnimationFrame(step);
       return () => cancelAnimationFrame(raf);
@@ -1164,7 +1190,8 @@
     const leadPct = Math.max(0, ...factors.map((f) => f.pct));
     const baselineWindow = Math.max(8, leadPct - baselinePct);
     const signalScore = (factor) => {
-      if (!factor || factor.pct <= 0 || leadPct <= 0) return 0;
+      if (!factor || factor.pct <= 0 || leadPct <= 0)
+        return 0;
       const aboveBaseline = Math.max(0, factor.pct - baselinePct);
       const baselineComponent = Math.min(1, aboveBaseline / baselineWindow);
       const leaderComponent = Math.min(1, factor.pct / Math.max(leadPct, baselinePct));
@@ -1389,7 +1416,8 @@
     const [idleMin, setIdleMin] = useState(idleMinBase);
     useEffect(() => {
       setIdleMin(idleMinBase);
-      if (!isFiniteNumber(idleMinBase)) return;
+      if (!isFiniteNumber(idleMinBase))
+        return;
       const ticker = setInterval(() => setIdleMin((prev) => isFiniteNumber(prev) ? prev + 1 : prev), 6e4);
       return () => clearInterval(ticker);
     }, [idleMinBase]);
@@ -1503,9 +1531,12 @@
     { id: "mindful", label: "Mindful", cellBg: "#EAF3EE", accent: "#3A9E6F", textColor: "#2A7A54" }
   ];
   var stateFromCapture = (avgCapture) => {
-    if (avgCapture >= 0.7) return CAPTURE_STATES[0];
-    if (avgCapture >= 0.45) return CAPTURE_STATES[1];
-    if (avgCapture >= 0.25) return CAPTURE_STATES[2];
+    if (avgCapture >= 0.7)
+      return CAPTURE_STATES[0];
+    if (avgCapture >= 0.45)
+      return CAPTURE_STATES[1];
+    if (avgCapture >= 0.25)
+      return CAPTURE_STATES[2];
     return CAPTURE_STATES[3];
   };
   var derivePersonalCaptureBaselineSec = (dateBuckets) => {
@@ -1514,7 +1545,8 @@
       const source = (entry == null ? void 0 : entry.raw) || entry || {};
       return (_b = (_a = maybeNum(entry == null ? void 0 : entry.durationSec)) != null ? _a : maybeNum(source.durationSec)) != null ? _b : maybeNum(source.sessionDurationSec);
     }).filter((durationSec) => isFiniteNumber(durationSec) && durationSec >= 20).slice(-30).sort((a, b) => a - b);
-    if (!recentDurations.length) return 180;
+    if (!recentDurations.length)
+      return 180;
     const mid = Math.floor(recentDurations.length / 2);
     const median = recentDurations.length % 2 ? recentDurations[mid] : (recentDurations[mid - 1] + recentDurations[mid]) / 2;
     return Math.min(300, Math.max(90, median));
@@ -1523,13 +1555,15 @@
     var _a, _b;
     const source = (entry == null ? void 0 : entry.raw) || entry || {};
     const durationSec = (_b = (_a = maybeNum(entry == null ? void 0 : entry.durationSec)) != null ? _a : maybeNum(source.durationSec)) != null ? _b : maybeNum(source.sessionDurationSec);
-    if (!isFiniteNumber(durationSec) || durationSec <= 0) return 0.2;
+    if (!isFiniteNumber(durationSec) || durationSec <= 0)
+      return 0.2;
     return Math.max(0.1, Math.min(durationSec / personalBaselineSec, 1));
   };
   var getDaySessionDisplayProbability = (session, personalBaselineSec = 180) => {
     var _a;
     const rawProbability = (_a = maybeNum(session == null ? void 0 : session.S_t)) != null ? _a : maybeNum(session == null ? void 0 : session.captureProb);
-    if (!isFiniteNumber(rawProbability)) return null;
+    if (!isFiniteNumber(rawProbability))
+      return null;
     return Math.max(0, Math.min(1, rawProbability));
   };
   var CaptureIcon = ({ stateId, size = 22 }) => {
@@ -1537,9 +1571,12 @@
     const state = CAPTURE_STATES.find((s) => s.id === stateId) || CAPTURE_STATES[3];
     const bg = state.accent;
     const scale = size / 100;
-    if (stateId === "doom") return /* @__PURE__ */ React.createElement("svg", { width: size, height: size, viewBox: `0 0 ${size} ${size}`, fill: "none", style: { overflow: "visible" } }, /* @__PURE__ */ React.createElement("g", { transform: `scale(${scale})` }, /* @__PURE__ */ React.createElement("rect", { x: "15", y: "20", width: "70", height: "65", rx: "16", fill: bg }), /* @__PURE__ */ React.createElement("line", { x1: "28", y1: "42", x2: "72", y2: "42", stroke: ink, strokeWidth: "5", strokeLinecap: "round" }), /* @__PURE__ */ React.createElement("line", { x1: "32", y1: "50", x2: "44", y2: "50", stroke: ink, strokeWidth: "4", strokeLinecap: "round" }), /* @__PURE__ */ React.createElement("line", { x1: "56", y1: "50", x2: "68", y2: "50", stroke: ink, strokeWidth: "4", strokeLinecap: "round" }), /* @__PURE__ */ React.createElement("line", { x1: "42", y1: "68", x2: "58", y2: "68", stroke: ink, strokeWidth: "4", strokeLinecap: "round" })));
-    if (stateId === "hooked") return /* @__PURE__ */ React.createElement("svg", { width: size, height: size, viewBox: `0 0 ${size} ${size}`, fill: "none", style: { overflow: "visible" } }, /* @__PURE__ */ React.createElement("g", { transform: `scale(${scale})` }, /* @__PURE__ */ React.createElement("path", { d: "M 50 15 L 85 80 L 15 80 Z", fill: bg, stroke: bg, strokeWidth: "12", strokeLinejoin: "round" }), /* @__PURE__ */ React.createElement("path", { d: "M 32 55 L 43 60 L 32 65 M 68 55 L 57 60 L 68 65", stroke: ink, strokeWidth: "4", strokeLinecap: "round", strokeLinejoin: "round", fill: "none" }), /* @__PURE__ */ React.createElement("line", { x1: "45", y1: "75", x2: "55", y2: "75", stroke: ink, strokeWidth: "4", strokeLinecap: "round" })));
-    if (stateId === "aware") return /* @__PURE__ */ React.createElement("svg", { width: size, height: size, viewBox: `0 0 ${size} ${size}`, fill: "none", style: { overflow: "visible" } }, /* @__PURE__ */ React.createElement("g", { transform: `scale(${scale})` }, /* @__PURE__ */ React.createElement("path", { d: "M 50 15 L 85 32 L 85 68 L 50 85 L 15 68 L 15 32 Z", fill: bg, stroke: bg, strokeWidth: "10", strokeLinejoin: "round" }), /* @__PURE__ */ React.createElement("circle", { cx: "38", cy: "50", r: "14", fill: "#FFF" }), /* @__PURE__ */ React.createElement("circle", { cx: "62", cy: "50", r: "14", fill: "#FFF" }), /* @__PURE__ */ React.createElement("circle", { cx: "33", cy: "50", r: "5", fill: ink }), /* @__PURE__ */ React.createElement("circle", { cx: "57", cy: "50", r: "5", fill: ink })));
+    if (stateId === "doom")
+      return /* @__PURE__ */ React.createElement("svg", { width: size, height: size, viewBox: `0 0 ${size} ${size}`, fill: "none", style: { overflow: "visible" } }, /* @__PURE__ */ React.createElement("g", { transform: `scale(${scale})` }, /* @__PURE__ */ React.createElement("rect", { x: "15", y: "20", width: "70", height: "65", rx: "16", fill: bg }), /* @__PURE__ */ React.createElement("line", { x1: "28", y1: "42", x2: "72", y2: "42", stroke: ink, strokeWidth: "5", strokeLinecap: "round" }), /* @__PURE__ */ React.createElement("line", { x1: "32", y1: "50", x2: "44", y2: "50", stroke: ink, strokeWidth: "4", strokeLinecap: "round" }), /* @__PURE__ */ React.createElement("line", { x1: "56", y1: "50", x2: "68", y2: "50", stroke: ink, strokeWidth: "4", strokeLinecap: "round" }), /* @__PURE__ */ React.createElement("line", { x1: "42", y1: "68", x2: "58", y2: "68", stroke: ink, strokeWidth: "4", strokeLinecap: "round" })));
+    if (stateId === "hooked")
+      return /* @__PURE__ */ React.createElement("svg", { width: size, height: size, viewBox: `0 0 ${size} ${size}`, fill: "none", style: { overflow: "visible" } }, /* @__PURE__ */ React.createElement("g", { transform: `scale(${scale})` }, /* @__PURE__ */ React.createElement("path", { d: "M 50 15 L 85 80 L 15 80 Z", fill: bg, stroke: bg, strokeWidth: "12", strokeLinejoin: "round" }), /* @__PURE__ */ React.createElement("path", { d: "M 32 55 L 43 60 L 32 65 M 68 55 L 57 60 L 68 65", stroke: ink, strokeWidth: "4", strokeLinecap: "round", strokeLinejoin: "round", fill: "none" }), /* @__PURE__ */ React.createElement("line", { x1: "45", y1: "75", x2: "55", y2: "75", stroke: ink, strokeWidth: "4", strokeLinecap: "round" })));
+    if (stateId === "aware")
+      return /* @__PURE__ */ React.createElement("svg", { width: size, height: size, viewBox: `0 0 ${size} ${size}`, fill: "none", style: { overflow: "visible" } }, /* @__PURE__ */ React.createElement("g", { transform: `scale(${scale})` }, /* @__PURE__ */ React.createElement("path", { d: "M 50 15 L 85 32 L 85 68 L 50 85 L 15 68 L 15 32 Z", fill: bg, stroke: bg, strokeWidth: "10", strokeLinejoin: "round" }), /* @__PURE__ */ React.createElement("circle", { cx: "38", cy: "50", r: "14", fill: "#FFF" }), /* @__PURE__ */ React.createElement("circle", { cx: "62", cy: "50", r: "14", fill: "#FFF" }), /* @__PURE__ */ React.createElement("circle", { cx: "33", cy: "50", r: "5", fill: ink }), /* @__PURE__ */ React.createElement("circle", { cx: "57", cy: "50", r: "5", fill: ink })));
     return /* @__PURE__ */ React.createElement("svg", { width: size, height: size, viewBox: `0 0 ${size} ${size}`, fill: "none", style: { overflow: "visible" } }, /* @__PURE__ */ React.createElement("g", { transform: `scale(${scale})` }, /* @__PURE__ */ React.createElement("circle", { cx: "35", cy: "35", r: "22", fill: bg }), /* @__PURE__ */ React.createElement("circle", { cx: "65", cy: "35", r: "22", fill: bg }), /* @__PURE__ */ React.createElement("circle", { cx: "35", cy: "65", r: "22", fill: bg }), /* @__PURE__ */ React.createElement("circle", { cx: "65", cy: "65", r: "22", fill: bg }), /* @__PURE__ */ React.createElement("rect", { x: "35", y: "35", width: "30", height: "30", fill: bg }), /* @__PURE__ */ React.createElement("path", { d: "M 32 48 Q 38 56 44 48 M 56 48 Q 62 56 68 48", stroke: ink, strokeWidth: "4", strokeLinecap: "round", fill: "none" }), /* @__PURE__ */ React.createElement("path", { d: "M 42 62 Q 50 70 58 62", stroke: ink, strokeWidth: "4", strokeLinecap: "round", fill: "none" })));
   };
   var monthNames = [
@@ -1557,7 +1594,8 @@
     "December"
   ];
   function DayDetailSheet({ dateStr, dayBucket, personalCaptureBaselineSec, onClose }) {
-    if (!dateStr || !dayBucket) return null;
+    if (!dateStr || !dayBucket)
+      return null;
     const [y, m, d] = dateStr.split("-").map(Number);
     const label = `${d} ${monthNames[m - 1]}, ${y}`;
     const sessions = safeArr(dayBucket).sort((a, b) => {
@@ -1567,7 +1605,8 @@
     });
     const weighted = sessions.map((e) => {
       const prob = getDaySessionDisplayProbability(e.raw, personalCaptureBaselineSec);
-      if (!isFiniteNumber(prob)) return null;
+      if (!isFiniteNumber(prob))
+        return null;
       const weight = getDayCaptureWeight(e, personalCaptureBaselineSec);
       return weight > 0 ? { prob, weight } : null;
     }).filter(Boolean);
@@ -1720,7 +1759,8 @@
     const personalCaptureBaselineSec = derivePersonalCaptureBaselineSec(dateBuckets);
     const dayLookup = {};
     heatmap.forEach((d) => {
-      if (d.date) dayLookup[d.date] = d;
+      if (d.date)
+        dayLookup[d.date] = d;
     });
     const collectionStartDate = Object.keys(dateBuckets).length ? Object.keys(dateBuckets).sort()[0] : heatmap.map((d) => d == null ? void 0 : d.date).filter(Boolean).sort()[0] || null;
     const year = viewMonth.year;
@@ -1753,7 +1793,8 @@
       return m > 11 ? { year: prev.year + 1, month: 0 } : { year: prev.year, month: m };
     });
     const cells = [];
-    for (let i = 0; i < startDow; i++) cells.push(null);
+    for (let i = 0; i < startDow; i++)
+      cells.push(null);
     for (let d = 1; d <= daysInMonth; d++) {
       const dateStr = `${year}-${String(month + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
       const entry = dayLookup[dateStr];
@@ -1834,7 +1875,8 @@
       textTransform: "uppercase",
       padding: "4px 0"
     } }, d))), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 5 } }, cells.map((cell, idx) => {
-      if (!cell) return /* @__PURE__ */ React.createElement("div", { key: `empty-${idx}` });
+      if (!cell)
+        return /* @__PURE__ */ React.createElement("div", { key: `empty-${idx}` });
       const today = /* @__PURE__ */ new Date();
       const isToday = cell.day === today.getDate() && month === today.getMonth() && year === today.getFullYear();
       const cellDate = new Date(year, month, cell.day);
@@ -2017,7 +2059,8 @@
   // app/src/main/assets/www/screens/DashboardScreen.jsx
   function MoodDissonanceCard({ data }) {
     const mood = data == null ? void 0 : data.moodDissonance;
-    if (!mood) return null;
+    if (!mood)
+      return null;
     const doomMood = maybeNum(mood.doomMoodDelta);
     const mindfulMood = maybeNum(mood.mindfulMoodDelta);
     const doomRegret = maybeNum(mood.doomAvgRegret);
@@ -2029,14 +2072,18 @@
     const summary = (() => {
       if (isFiniteNumber(doomMood) && isFiniteNumber(mindfulMood)) {
         const gap = mindfulMood - doomMood;
-        if (gap >= 0.6) return "Mindful sessions are leaving you noticeably better than autopilot ones.";
-        if (gap <= -0.6) return "Recent data is unusual: autopilot sessions look better than mindful ones.";
+        if (gap >= 0.6)
+          return "Mindful sessions are leaving you noticeably better than autopilot ones.";
+        if (gap <= -0.6)
+          return "Recent data is unusual: autopilot sessions look better than mindful ones.";
         return "Mood difference between session types is currently small.";
       }
       if (isFiniteNumber(doomRegret) && isFiniteNumber(mindfulRegret)) {
         const gap = doomRegret - mindfulRegret;
-        if (gap >= 0.6) return "Autopilot sessions carry higher regret than mindful sessions.";
-        if (gap <= -0.6) return "Regret is currently higher in mindful sessions than autopilot sessions.";
+        if (gap >= 0.6)
+          return "Autopilot sessions carry higher regret than mindful sessions.";
+        if (gap <= -0.6)
+          return "Regret is currently higher in mindful sessions than autopilot sessions.";
         return "Regret difference between session types is currently small.";
       }
       return "More post-session check-ins will sharpen this comparison.";
@@ -2113,7 +2160,8 @@
           grid[row * cols + col] = { s, idx };
         });
         return grid.map((cell, gi) => {
-          if (!cell) return /* @__PURE__ */ React.createElement("div", { key: `empty-${gi}` });
+          if (!cell)
+            return /* @__PURE__ */ React.createElement("div", { key: `empty-${gi}` });
           const { s, idx } = cell;
           const c = s.isDoom ? D.danger : D.safe;
           const durationMin = maybeNum(s.durationMin);
@@ -2220,8 +2268,10 @@
       });
       const avgVal = heatData.length > 0 ? Math.round(heatData.reduce((sum, d) => sum + d.value, 0) / heatData.length) : 0;
       const getBarColor = (val) => {
-        if (val < 33) return "#2A7A54";
-        if (val < 66) return "#D4A574";
+        if (val < 33)
+          return "#2A7A54";
+        if (val < 66)
+          return "#D4A574";
         return "#C4563A";
       };
       return /* @__PURE__ */ React.createElement(BarChart, { data: heatData, margin: { top: 12, right: 8, left: -8, bottom: 32 } }, /* @__PURE__ */ React.createElement(XAxis, { dataKey: "day", tick: { fill: D.muted, fontSize: 10 }, angle: -45, textAnchor: "end", height: 60 }), /* @__PURE__ */ React.createElement(
@@ -2302,8 +2352,10 @@
       const circProfile = safeArr(data.circadianProfile);
       const fmtHour = (h) => {
         const hr = (h % 24 + 24) % 24;
-        if (hr === 0) return "12 AM";
-        if (hr === 12) return "12 PM";
+        if (hr === 0)
+          return "12 AM";
+        if (hr === 12)
+          return "12 PM";
         return hr < 12 ? `${hr} AM` : `${hr - 12} PM`;
       };
       const circRaw = circProfile.map((p) => ({
@@ -2312,7 +2364,8 @@
         label: fmtHour(p.hour)
       }));
       const smoothCirc = (data2, win) => {
-        if (win <= 1) return data2;
+        if (win <= 1)
+          return data2;
         return data2.map((pt, idx) => {
           const half = Math.floor(win / 2);
           let sum = 0, count = 0;
@@ -2330,8 +2383,10 @@
       const safePt = circProfile.reduce((best, c) => !best || c.captureProb < best.captureProb ? c : best, null);
       const formatHr = (hour) => {
         const h = (hour % 24 + 24) % 24;
-        if (h === 0) return "12 AM";
-        if (h === 12) return "12 PM";
+        if (h === 0)
+          return "12 AM";
+        if (h === 12)
+          return "12 PM";
         return h < 12 ? `${h} AM` : `${h - 12} PM`;
       };
       return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { height: 200 } }, /* @__PURE__ */ React.createElement(ResponsiveContainer, { width: "100%", height: "100%" }, /* @__PURE__ */ React.createElement(LineChart, { data: circData, margin: { top: 8, right: 12, left: 8, bottom: 8 } }, /* @__PURE__ */ React.createElement(XAxis, { dataKey: "label", tick: { fill: D.muted, fontSize: 10 } }), /* @__PURE__ */ React.createElement(
@@ -2406,7 +2461,8 @@
         p: Math.round(safeNum(r.captureProb, 0) * 100)
       }));
       const smoothData = (data2, windowSize2) => {
-        if (windowSize2 <= 1) return data2;
+        if (windowSize2 <= 1)
+          return data2;
         return data2.map((point, idx) => {
           const half = Math.floor(windowSize2 / 2);
           const start = Math.max(0, idx - half);
@@ -2426,16 +2482,22 @@
       const smoothDoom = reelData.length > 0 ? Math.round(reelData.filter((d) => d.p >= 66).length / reelData.length * 100) : 0;
       const smoothBorder = Math.max(0, 100 - smoothSafe - smoothDoom);
       const getTickInterval = (max) => {
-        if (max <= 30) return 5;
-        if (max <= 80) return 10;
-        if (max <= 200) return 20;
-        if (max <= 500) return 50;
+        if (max <= 30)
+          return 5;
+        if (max <= 80)
+          return 10;
+        if (max <= 200)
+          return 20;
+        if (max <= 500)
+          return 50;
         return 100;
       };
       const tickInterval = getTickInterval(maxReel);
       const explicitTicks = [];
-      for (let t = tickInterval; t <= maxReel; t += tickInterval) explicitTicks.push(t);
-      if (explicitTicks.length === 0 && maxReel > 0) explicitTicks.push(maxReel);
+      for (let t = tickInterval; t <= maxReel; t += tickInterval)
+        explicitTicks.push(t);
+      if (explicitTicks.length === 0 && maxReel > 0)
+        explicitTicks.push(maxReel);
       return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 10, color: D.text, fontSize: 13 } }, "Across all ", totalReels, " reels: ", smoothSafe, "% mindful, ", smoothBorder, "% borderline, ", smoothDoom, "% autopilot"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", height: 10, borderRadius: 999, overflow: "hidden", background: "#E4DED4", marginBottom: 12 } }, /* @__PURE__ */ React.createElement("div", { style: { width: `${smoothSafe}%`, background: D.safe, transition: "width 0.3s ease" } }), /* @__PURE__ */ React.createElement("div", { style: { width: `${smoothBorder}%`, background: D.warn, transition: "width 0.3s ease" } }), /* @__PURE__ */ React.createElement("div", { style: { width: `${smoothDoom}%`, background: D.danger, transition: "width 0.3s ease" } })), /* @__PURE__ */ React.createElement("div", { style: { height: 210 } }, /* @__PURE__ */ React.createElement(ResponsiveContainer, { width: "100%", height: "100%" }, /* @__PURE__ */ React.createElement(LineChart, { data: reelData, margin: { top: 12, right: 12, left: 8, bottom: 8 } }, /* @__PURE__ */ React.createElement(
         XAxis,
         {
@@ -2459,8 +2521,10 @@
           contentStyle: { background: D.cardLight, border: `1px solid ${D.borderSoft}`, borderRadius: 10, fontSize: 12, color: D.ink, boxShadow: "0 4px 16px rgba(0,0,0,0.08)" },
           formatter: (v) => {
             let riskLevel = "Mindful";
-            if (v >= 33 && v < 66) riskLevel = "Borderline";
-            if (v >= 66) riskLevel = "Autopilot";
+            if (v >= 33 && v < 66)
+              riskLevel = "Borderline";
+            if (v >= 66)
+              riskLevel = "Autopilot";
             return [`${v}% - ${riskLevel}`, "Risk"];
           },
           labelStyle: { color: D.muted, fontWeight: 700 },
@@ -2526,8 +2590,10 @@
           const sleepStr = window.Android.getSleepSchedule();
           if (typeof sleepStr === "string" && sleepStr.includes(",")) {
             const [s, e] = sleepStr.split(",").map(Number);
-            if (!Number.isNaN(s)) setSleepStart(s);
-            if (!Number.isNaN(e)) setSleepEnd(e);
+            if (!Number.isNaN(s))
+              setSleepStart(s);
+            if (!Number.isNaN(e))
+              setSleepEnd(e);
           }
         }
       }
@@ -2535,16 +2601,19 @@
     const handleSurveyChange = (e) => {
       const val = parseFloat(e.target.value);
       setSurveyProb(val);
-      if (window.Android && window.Android.setSurveyFrequency) window.Android.setSurveyFrequency(val);
+      if (window.Android && window.Android.setSurveyFrequency)
+        window.Android.setSurveyFrequency(val);
     };
     const handleSleepChange = (type, val) => {
       const v = parseInt(val, 10);
       if (type === "start") {
         setSleepStart(v);
-        if (window.Android && window.Android.setSleepSchedule) window.Android.setSleepSchedule(v, sleepEnd);
+        if (window.Android && window.Android.setSleepSchedule)
+          window.Android.setSleepSchedule(v, sleepEnd);
       } else {
         setSleepEnd(v);
-        if (window.Android && window.Android.setSleepSchedule) window.Android.setSleepSchedule(sleepStart, v);
+        if (window.Android && window.Android.setSleepSchedule)
+          window.Android.setSleepSchedule(sleepStart, v);
       }
     };
     const baselineSessions = safeNum(data.totalSessions, safeNum(data.sessionsToday, 0));
@@ -2554,8 +2623,10 @@
     const sinceDate = typeof data.dataSinceDate === "string" ? data.dataSinceDate : null;
     const onReset = () => {
       const ok = window.confirm("Are you sure? This cannot be undone. The app will rebuild your baseline from new sessions.");
-      if (!ok) return;
-      if (window.Android && window.Android.clearData) window.Android.clearData();
+      if (!ok)
+        return;
+      if (window.Android && window.Android.clearData)
+        window.Android.clearData();
     };
     return /* @__PURE__ */ React.createElement("div", { style: { padding: "16px 16px 32px", position: "relative", zIndex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 20, padding: "8px 2px 0" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 20, fontWeight: 800, color: D.ink, fontFamily: "'Space Grotesk', sans-serif", letterSpacing: "-0.01em" } }, "App Settings"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, fontWeight: 700, color: D.soft, fontFamily: "'Nunito', sans-serif" } }, "Customize your experience")), /* @__PURE__ */ React.createElement("div", { className: "card fade-card", style: { ...fadeDelayStyle(0), padding: 14, marginBottom: 12 } }, /* @__PURE__ */ React.createElement(Label, { style: { color: D.info } }, "Your Baseline"), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginTop: 10 } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "spacemono", style: { fontSize: 20, color: D.ink, fontWeight: 700 } }, baselineSessionsCounted), /* @__PURE__ */ React.createElement("div", { style: { color: D.muted, fontSize: 11 } }, "Sessions tracked")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: {
       fontSize: 16,
@@ -2881,7 +2952,8 @@
     const t0Ref = useRef(null);
     useEffect(() => {
       const canvas = canvasRef.current;
-      if (!canvas) return;
+      if (!canvas)
+        return;
       const ctx = canvas.getContext("2d");
       const resize = () => {
         const dpr = window.devicePixelRatio || 1;
@@ -2905,7 +2977,8 @@
       loop();
       return () => {
         window.removeEventListener("resize", resize);
-        if (rafRef.current) cancelAnimationFrame(rafRef.current);
+        if (rafRef.current)
+          cancelAnimationFrame(rafRef.current);
       };
     }, []);
     return /* @__PURE__ */ React.createElement("canvas", { ref: canvasRef, style: {
@@ -2987,7 +3060,7 @@
       lineHeight: 1.12,
       letterSpacing: "-0.02em",
       color: "#1A1612"
-    } }, "meet", /* @__PURE__ */ React.createElement("br", null), /* @__PURE__ */ React.createElement("em", { style: { fontStyle: "italic", fontWeight: 400 } }, "your personal Instagram scroll tracker."))), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }), /* @__PURE__ */ React.createElement("div", { style: {
+    } }, /* @__PURE__ */ React.createElement("em", { style: { fontStyle: "italic", fontWeight: 400 } }, "your personal Instagram scroll tracker."))), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }), /* @__PURE__ */ React.createElement("div", { style: {
       position: "relative",
       zIndex: 20,
       padding: "0 18px 32px",
@@ -3118,7 +3191,8 @@
   function getSessionDisplayProbability(session, baselineSec = 180) {
     var _a;
     const rawProbability = (_a = maybeNum(session == null ? void 0 : session.S_t)) != null ? _a : maybeNum(session == null ? void 0 : session.captureProb);
-    if (!isFiniteNumber(rawProbability)) return null;
+    if (!isFiniteNumber(rawProbability))
+      return null;
     return Math.max(0, Math.min(1, rawProbability));
   }
   function normalizeData(rawData) {
@@ -3133,7 +3207,8 @@
         const source = (entry == null ? void 0 : entry.raw) || entry || {};
         return (_c2 = (_b2 = (_a2 = maybeNum(entry == null ? void 0 : entry.durationSec)) != null ? _a2 : maybeNum(source.durationSec)) != null ? _b2 : maybeNum(source.sessionDurationSec)) != null ? _c2 : deriveSessionDurationSec(source);
       }).filter((durationSec) => isFiniteNumber(durationSec) && durationSec >= 20).slice(-30).sort((a, b) => a - b);
-      if (!recentDurations.length) return 180;
+      if (!recentDurations.length)
+        return 180;
       const mid = Math.floor(recentDurations.length / 2);
       const median = recentDurations.length % 2 ? recentDurations[mid] : (recentDurations[mid - 1] + recentDurations[mid]) / 2;
       return Math.min(300, Math.max(90, median));
@@ -3145,8 +3220,10 @@
     const dateBuckets = {};
     sessions.forEach((s, idx) => {
       const key = normalizeDateKey(s);
-      if (!key) return;
-      if (!dateBuckets[key]) dateBuckets[key] = [];
+      if (!key)
+        return;
+      if (!dateBuckets[key])
+        dateBuckets[key] = [];
       dateBuckets[key].push({
         raw: s,
         idx,
@@ -3159,7 +3236,8 @@
     const earliestDateKey = dateKeys.length ? dateKeys[0] : null;
     const latestDateSessions = latestDateKey ? [...dateBuckets[latestDateKey]] : [];
     latestDateSessions.sort((a, b) => {
-      if (isFiniteNumber(a.ts) && isFiniteNumber(b.ts)) return a.ts - b.ts;
+      if (isFiniteNumber(a.ts) && isFiniteNumber(b.ts))
+        return a.ts - b.ts;
       return a.idx - b.idx;
     });
     const deriveHeatmapLabels = (dateKey, fallbackLabel = "") => {
@@ -3224,18 +3302,21 @@
       return { raw: merged, idx, ts: pickSessionTimestampMs(merged), durationSec: deriveSessionDurationSec(merged) };
     }).filter((entry) => normalizeDateKey(entry.raw) === deviceTodayKey);
     providedTodaySource.sort((a, b) => {
-      if (isFiniteNumber(a.ts) && isFiniteNumber(b.ts)) return a.ts - b.ts;
+      if (isFiniteNumber(a.ts) && isFiniteNumber(b.ts))
+        return a.ts - b.ts;
       return a.idx - b.idx;
     });
     const deviceTodaySessions = dateBuckets[deviceTodayKey] ? [...dateBuckets[deviceTodayKey]].sort((a, b) => {
-      if (isFiniteNumber(a.ts) && isFiniteNumber(b.ts)) return a.ts - b.ts;
+      if (isFiniteNumber(a.ts) && isFiniteNumber(b.ts))
+        return a.ts - b.ts;
       return a.idx - b.idx;
     }) : [];
     const todaySource = providedTodaySource.length ? providedTodaySource : deviceTodaySessions;
     let prevTs = null;
     const todaySessionsDetailed = todaySource.map((entry) => {
       const row = timelineEntryFromSource(entry, prevTs);
-      if (isFiniteNumber(row._ts)) prevTs = row._ts;
+      if (isFiniteNumber(row._ts))
+        prevTs = row._ts;
       return row;
     });
     const todaySessions = todaySessionsDetailed.map(({ _ts, probability, ...rest }) => rest);
@@ -3253,7 +3334,8 @@
     const interactionsFromToday = todaySource.map((entry) => {
       const s = entry.raw || entry;
       const explicit = maybeNum(s.totalInteractions);
-      if (isFiniteNumber(explicit)) return explicit;
+      if (isFiniteNumber(explicit))
+        return explicit;
       const parts = [
         maybeNum(s.totalLikes),
         maybeNum(s.totalComments),
@@ -3278,7 +3360,8 @@
       let prevEndMs = null;
       if (typeof prevEndRaw === "string" && prevEndRaw && prevEndRaw !== "Unknown") {
         const parsed = new Date(prevEndRaw);
-        if (!Number.isNaN(parsed.getTime())) prevEndMs = parsed.getTime();
+        if (!Number.isNaN(parsed.getTime()))
+          prevEndMs = parsed.getTime();
       }
       const gapBaseMs = isFiniteNumber(prevEndMs) ? prevEndMs : prev.startMs;
       derivedGapMin = Math.max(0, (last.startMs - gapBaseMs) / 6e4);
@@ -3290,10 +3373,14 @@
     const captureRiskScoreRaw = isFiniteNumber(latestDisplayProbability) ? latestDisplayProbability * 100 : (_d = maybeNum(rawData == null ? void 0 : rawData.captureRiskScore)) != null ? _d : isFiniteNumber(maybeNum(mostRecent == null ? void 0 : mostRecent.S_t)) ? maybeNum(mostRecent == null ? void 0 : mostRecent.S_t) * 100 : null;
     const captureRiskScore = isFiniteNumber(captureRiskScoreRaw) ? Math.max(0, Math.min(100, captureRiskScoreRaw)) : null;
     const deriveRiskLabel = (score) => {
-      if (!isFiniteNumber(score)) return null;
-      if (score >= 70) return "CRITICAL";
-      if (score >= 45) return "ELEVATED";
-      if (score >= 25) return "STABLE";
+      if (!isFiniteNumber(score))
+        return null;
+      if (score >= 70)
+        return "CRITICAL";
+      if (score >= 45)
+        return "ELEVATED";
+      if (score >= 25)
+        return "STABLE";
       return "SAFE";
     };
     const riskLabel = deriveRiskLabel(captureRiskScore) || "SAFE";
@@ -3317,8 +3404,10 @@
       weeklyDelta = diff <= -0.03 ? "Improving" : diff >= 0.03 ? "Worsening" : "Stable";
     }
     const parseHour = (v) => {
-      if (isFiniteNumber(v)) return v;
-      if (typeof v === "string" && /^\d{1,2}$/.test(v.trim())) return parseInt(v.trim(), 10);
+      if (isFiniteNumber(v))
+        return v;
+      if (typeof v === "string" && /^\d{1,2}$/.test(v.trim()))
+        return parseInt(v.trim(), 10);
       return null;
     };
     const circadianFromPayload = safeArr(rawData == null ? void 0 : rawData.circadianProfile).map((c) => ({
@@ -3365,7 +3454,8 @@
       const filtered = safeArr(drivers).map((d) => {
         var _a2;
         const contribution = (_a2 = maybeNum(d == null ? void 0 : d.contribution)) != null ? _a2 : maybeNum(d == null ? void 0 : d.weight);
-        if (!isFiniteNumber(contribution)) return null;
+        if (!isFiniteNumber(contribution))
+          return null;
         const name = typeof (d == null ? void 0 : d.name) === "string" && d.name ? d.name : "Unlabeled driver";
         return {
           name,
@@ -3391,7 +3481,8 @@
     const pickComponentValue = (obj, keys) => {
       for (let i = 0; i < keys.length; i++) {
         const candidate = maybeNum(obj == null ? void 0 : obj[keys[i]]);
-        if (isFiniteNumber(candidate)) return candidate;
+        if (isFiniteNumber(candidate))
+          return candidate;
       }
       return null;
     };
@@ -3426,7 +3517,8 @@
     const payloadReelData = safeArr(topologyFromPayload == null ? void 0 : topologyFromPayload.reelData).map((r, idx) => {
       var _a2;
       const captureProb = maybeNum(r == null ? void 0 : r.captureProb);
-      if (!isFiniteNumber(captureProb)) return null;
+      if (!isFiniteNumber(captureProb))
+        return null;
       return {
         index: (_a2 = maybeNum(r == null ? void 0 : r.index)) != null ? _a2 : idx + 1,
         captureProb,
@@ -3466,14 +3558,16 @@
       const explicitDurationSec = (_a2 = maybeNum(source.durationSec)) != null ? _a2 : maybeNum(source.sessionDurationSec);
       const fallbackDurationSec = isFiniteNumber(entry == null ? void 0 : entry.durationSec) ? entry.durationSec : deriveSessionDurationSec(source);
       const durationSec = isFiniteNumber(explicitDurationSec) ? explicitDurationSec : fallbackDurationSec;
-      if (!isFiniteNumber(durationSec) || durationSec <= 0) return 0.2;
+      if (!isFiniteNumber(durationSec) || durationSec <= 0)
+        return 0.2;
       return Math.max(0.1, Math.min(durationSec / personalCaptureBaselineSec, 1));
     };
     const derivedHeatmapData = dateKeys.map((dateKey) => {
       const bucket = dateBuckets[dateKey] || [];
       const weighted = bucket.map((e) => {
         const prob = getSessionDisplayProbability(e.raw, personalCaptureBaselineSec);
-        if (!isFiniteNumber(prob)) return null;
+        if (!isFiniteNumber(prob))
+          return null;
         const weight = getDailyCaptureWeight(e);
         const isDoomSess = prob >= DOOM_THRESHOLD;
         return weight > 0 ? { prob, weight, isDoomSess } : null;
@@ -3498,7 +3592,8 @@
       let streak = 0;
       for (let i = sessions.length - 1; i >= 0; i -= 1) {
         const p = getSessionDisplayProbability(sessions[i], personalCaptureBaselineSec);
-        if (!isFiniteNumber(p) || p < DOOM_THRESHOLD) break;
+        if (!isFiniteNumber(p) || p < DOOM_THRESHOLD)
+          break;
         streak += 1;
       }
       return streak;
@@ -3507,7 +3602,8 @@
       let streak = 0;
       for (let i = sessions.length - 1; i >= 0; i -= 1) {
         const p = getSessionDisplayProbability(sessions[i], personalCaptureBaselineSec);
-        if (!isFiniteNumber(p) || p >= DOOM_THRESHOLD) break;
+        if (!isFiniteNumber(p) || p >= DOOM_THRESHOLD)
+          break;
         streak += 1;
       }
       return streak;
@@ -3515,7 +3611,8 @@
     const moodDissonance = (() => {
       const withMood = sessions.filter((s) => maybeNum(s.moodBefore) > 0 && maybeNum(s.moodAfter) > 0);
       const withRegret = sessions.filter((s) => maybeNum(s.regretScore) > 0);
-      if (!withMood.length && !withRegret.length) return null;
+      if (!withMood.length && !withRegret.length)
+        return null;
       const avg = (arr) => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
       const isDoomSession = (s) => {
         const p = getSessionDisplayProbability(s, personalCaptureBaselineSec);
@@ -3613,12 +3710,15 @@
     const peakWindow = data == null ? void 0 : data.peakRiskWindow;
     const currentHour = safeNum(data == null ? void 0 : data.currentHour, (/* @__PURE__ */ new Date()).getHours());
     const inPeakWindow = (() => {
-      if (!peakWindow || typeof peakWindow !== "string") return false;
+      if (!peakWindow || typeof peakWindow !== "string")
+        return false;
       const m = peakWindow.match(/(\d{1,2}):\d{2}\s*-\s*(\d{1,2}):\d{2}/);
-      if (!m) return false;
+      if (!m)
+        return false;
       const start = parseInt(m[1], 10);
       const end = parseInt(m[2], 10);
-      if (start <= end) return currentHour >= start && currentHour < end;
+      if (start <= end)
+        return currentHour >= start && currentHour < end;
       return currentHour >= start || currentHour < end;
     })();
     let chipText, chipDotColor, chipPulse;
@@ -3791,7 +3891,8 @@
       };
     }, []);
     const data = useMemo(() => rawData ? normalizeData(rawData) : {}, [rawData]);
-    if (loading) return /* @__PURE__ */ React.createElement(LoadingState, null);
+    if (loading)
+      return /* @__PURE__ */ React.createElement(LoadingState, null);
     if (error) {
       return /* @__PURE__ */ React.createElement("div", { style: { minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: D.bg, color: "#FF3B3B", padding: 20, textAlign: "center" } }, "\u26A0\uFE0F ", error);
     }
