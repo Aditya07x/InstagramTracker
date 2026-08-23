@@ -35,6 +35,18 @@ jobs:
     executor: docker-builder
     steps:
       - checkout
+      - run:
+          name: Path Filter (Dashboard)
+          command: |
+            if git rev-parse HEAD~1 >/dev/null 2>&1; then
+              CHANGED=$(git diff --name-only HEAD~1 HEAD)
+            else
+              CHANGED="dashboard/force-run"
+            fi
+            if ! echo "$CHANGED" | grep -qE "^(dashboard/|app/src/main/assets/www/|Dockerfile)"; then
+              echo "No dashboard files changed. Halting job."
+              circleci-agent step halt
+            fi
 
       # Allocate an isolated remote Docker daemon
       - setup_remote_docker:
@@ -91,6 +103,18 @@ jobs:
     steps:
       - checkout
       - run:
+          name: Path Filter (Dashboard)
+          command: |
+            if git rev-parse HEAD~1 >/dev/null 2>&1; then
+              CHANGED=$(git diff --name-only HEAD~1 HEAD)
+            else
+              CHANGED="dashboard/force-run"
+            fi
+            if ! echo "$CHANGED" | grep -qE "^(dashboard/|app/src/main/assets/www/)"; then
+              echo "No dashboard files changed. Halting job."
+              circleci-agent step halt
+            fi
+      - run:
           name: Install Dependencies
           command: |
             sudo npm install -g esbuild@0.20.2 firebase-tools
@@ -106,6 +130,27 @@ jobs:
               --outfile=firebase_public/app.bundle.js \
               --jsx-factory=React.createElement \
               --jsx-fragment=React.Fragment
+      - run:
+          name: Security Check - Bundle Size & Bridge Calls
+          command: |
+            BUNDLE="firebase_public/app.bundle.js"
+            SIZE=$(stat -c%s "$BUNDLE" 2>/dev/null || stat -f%z "$BUNDLE")
+            if [ "$SIZE" -gt 3145728 ]; then
+              echo "Security Error: Bundle size exceeds 3MB ($SIZE bytes). Potential bloat or injection."
+              exit 1
+            fi
+            
+            # Extract window.Android.* calls
+            CALLS=$(grep -o "window\.Android\.[a-zA-Z0-9_]*" "$BUNDLE" | sort -u || true)
+            ALLOWED="window.Android.clearData window.Android.exportCsv window.Android.generateReport window.Android.setSleepSchedule window.Android.setSurveyFrequency window.Android.isAccessibilityEnabled window.Android.enableAccessibility window.Android.getSleepSchedule window.Android.getSurveyFrequency"
+            
+            for CALL in $CALLS; do
+              if ! echo "$ALLOWED" | grep -qw "$CALL"; then
+                echo "Security Error: Unauthorized JS bridge call found: $CALL"
+                exit 1
+              fi
+            done
+            echo "Bridge calls and bundle size verified successfully."
       - run:
           name: Deploy to Firebase Hosting
           command: |
@@ -129,6 +174,18 @@ jobs:
     executor: android-builder
     steps:
       - checkout
+      - run:
+          name: Path Filter (Android)
+          command: |
+            if git rev-parse HEAD~1 >/dev/null 2>&1; then
+              CHANGED=$(git diff --name-only HEAD~1 HEAD)
+            else
+              CHANGED="app/force-run"
+            fi
+            if ! echo "$CHANGED" | grep -qE "^(app/src/main/java/|app/build.gradle.kts|build.gradle.kts|gradle/|settings.gradle.kts)"; then
+              echo "No Android source files changed. Halting job."
+              circleci-agent step halt
+            fi
 
       # Restore Gradle dependency and build cache
       - restore_cache:

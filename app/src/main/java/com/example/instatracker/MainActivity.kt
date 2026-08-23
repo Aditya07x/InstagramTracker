@@ -122,6 +122,28 @@ class MainActivity : ComponentActivity() {
         val targetDashboardUrl = prefs.getString("remote_dashboard_url", DEFAULT_REMOTE_DASHBOARD_URL) ?: DEFAULT_REMOTE_DASHBOARD_URL
 
         webView.webViewClient = object : WebViewClient() {
+            override fun shouldOverrideUrlLoading(view: WebView?, request: android.webkit.WebResourceRequest?): Boolean {
+                val urlString = request?.url?.toString() ?: return true
+                val allowedDomain = "https://reelio-web-20260312.web.app/"
+                val allowedLocal = "file:///android_asset/"
+                if (urlString.startsWith(allowedDomain) || urlString.startsWith(allowedLocal)) {
+                    return false // Let WebView load it
+                }
+                Log.w("ReactDashboard", "Blocked unauthorized navigation to: $urlString")
+                return true // Cancel navigation
+            }
+
+            override fun shouldInterceptRequest(view: WebView?, request: android.webkit.WebResourceRequest?): android.webkit.WebResourceResponse? {
+                val urlString = request?.url?.toString() ?: return null
+                val allowedDomain = "https://reelio-web-20260312.web.app/"
+                val allowedLocal = "file:///android_asset/"
+                if (!urlString.startsWith(allowedDomain) && !urlString.startsWith(allowedLocal) && !urlString.startsWith("data:")) {
+                    Log.w("ReactDashboard", "Blocked unauthorized resource request: $urlString")
+                    return android.webkit.WebResourceResponse("text/plain", "UTF-8", null)
+                }
+                return super.shouldInterceptRequest(view, request)
+            }
+
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
                 Log.d("ReactDashboard", "Page finished loading: $url")
