@@ -22,6 +22,9 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+venv/
+backend/venv/
+.env
 
 # Temporary Logs & Debug Reports
 *.log

@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: ankane/pgvector:latest
+    container_name: reelio-postgres
+    environment:
+      POSTGRES_USER: reelio
+      POSTGRES_PASSWORD: reelio_password
+      POSTGRES_DB: reelio_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./db_init:/docker-entrypoint-initdb.d
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    container_name: reelio-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+
+volumes:
+  pgdata:
+  redisdata:
