@@ -169,8 +169,6 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // Clear HTTP cache on startup to prevent stale web asset caching across OTA deploys
-        webView.clearCache(true)
         webView.loadUrl(targetDashboardUrl)
 
         // Schedule weekly notification worker (runs every 7 days at 9 AM)
