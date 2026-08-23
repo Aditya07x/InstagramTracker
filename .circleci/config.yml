@@ -43,7 +43,7 @@ jobs:
             else
               CHANGED="dashboard/force-run"
             fi
-            if ! echo "$CHANGED" | grep -qE "^(dashboard/|app/src/main/assets/www/|Dockerfile)"; then
+            if ! echo "$CHANGED" | grep -qE "^(dashboard/|app/src/main/assets/www/|Dockerfile|firebase\.json)"; then
               echo "No dashboard files changed. Halting job."
               circleci-agent step halt
             fi
@@ -110,7 +110,7 @@ jobs:
             else
               CHANGED="dashboard/force-run"
             fi
-            if ! echo "$CHANGED" | grep -qE "^(dashboard/|app/src/main/assets/www/)"; then
+            if ! echo "$CHANGED" | grep -qE "^(dashboard/|app/src/main/assets/www/|firebase\.json)"; then
               echo "No dashboard files changed. Halting job."
               circleci-agent step halt
             fi
