@@ -113,19 +113,18 @@ class DashboardActivity : ComponentActivity() {
                 try {
                     // ── Prefer pre-computed HMM JSON ──────────────────────────────
                     val hmmFile  = File(filesDir, "hmm_results.json")
-                    val csvFile  = File(filesDir, "insta_data.csv")
+                    val csvContent = DatabaseProvider.getCsvString(this@DashboardActivity)
 
                     val jsonContentRaw: String = when {
-                        hmmFile.exists() && hmmFile.length() > 10 && isCacheValid(hmmFile, csvFile) -> {
+                        hmmFile.exists() && hmmFile.length() > 10 && csvContent.isNotBlank() && isCacheValid(hmmFile, File(filesDir, "insta_data.csv")) -> {
                             android.util.Log.d("ReactDashboard", "Loading pre-computed HMM JSON (${hmmFile.length()} bytes)")
                             hmmFile.readText(Charsets.UTF_8)
                         }
-                        csvFile.exists() && csvFile.length() > 50 -> {
+                        csvContent.isNotBlank() -> {
                             android.util.Log.d("ReactDashboard", "Running HMM inference on CSV…")
                             if (!Python.isStarted()) {
                                 Python.start(AndroidPlatform(this@DashboardActivity))
                             }
-                            val csvContent = csvFile.readText()
                             val py = Python.getInstance()
                             
                             val dashLockWait1 = System.currentTimeMillis()
@@ -318,9 +317,8 @@ class DashboardActivity : ComponentActivity() {
                 webView.evaluateJavascript("if(window.showReportLoading) window.showReportLoading(true);", null)
                 val result = withContext(Dispatchers.IO) {
                     try {
-                        val file = File(filesDir, "insta_data.csv")
-                        if (!file.exists() || file.length() < 10) return@withContext "{\"error\": \"No data to generate report.\"}"
-                        val csvContent = file.readText()
+                        val csvContent = DatabaseProvider.getCsvString(mContext)
+                        if (csvContent.isBlank()) return@withContext "{\"error\": \"No data to generate report.\"}"
                         if (!Python.isStarted()) {
                             Python.start(AndroidPlatform(mContext))
                         }
@@ -333,7 +331,7 @@ class DashboardActivity : ComponentActivity() {
                             val hmmModule = py.getModule("reelio_alse")
                             // Read or generate the dashboard JSON — run_report_payload expects it as first arg
                             val hmmFile = File(filesDir, "hmm_results.json")
-                            val jsonContent = if (hmmFile.exists() && hmmFile.length() > 10 && isCacheValid(hmmFile, file)) {
+                            val jsonContent = if (hmmFile.exists() && hmmFile.length() > 10) {
                                 hmmFile.readText(Charsets.UTF_8)
                             } else {
                                 val statePath = File(filesDir, "alse_model_state.json").absolutePath
@@ -357,16 +355,22 @@ class DashboardActivity : ComponentActivity() {
         @JavascriptInterface
         fun exportCsv() {
             // Needed so existing HTML "Export CSV" buttons don't break when embedded in DashboardActivity
-            handler.post {
-                val file = File(filesDir, "insta_data.csv")
-                if (!file.exists()) return@post
-                val uri: android.net.Uri = androidx.core.content.FileProvider.getUriForFile(mContext, "${packageName}.fileprovider", file)
-                val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
-                    type = "text/csv"
-                    putExtra(android.content.Intent.EXTRA_STREAM, uri as android.os.Parcelable)
-                    addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    val csvContent = DatabaseProvider.getCsvString(mContext)
+                    if (csvContent.isBlank()) return@launch
+                    val tempFile = File(cacheDir, "export.csv")
+                    tempFile.writeText(csvContent)
+                    val uri: android.net.Uri = androidx.core.content.FileProvider.getUriForFile(mContext, "${packageName}.fileprovider", tempFile)
+                    val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                        type = "text/csv"
+                        putExtra(android.content.Intent.EXTRA_STREAM, uri as android.os.Parcelable)
+                        addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    mContext.startActivity(android.content.Intent.createChooser(intent, "Share Behavioral Baseline Data"))
+                } catch (e: Exception) {
+                    android.util.Log.e("ReactDashboard", "Error exporting CSV: ${e.message}", e)
                 }
-                mContext.startActivity(android.content.Intent.createChooser(intent, "Share Behavioral Baseline Data"))
             }
         }
 

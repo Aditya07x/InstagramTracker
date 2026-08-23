@@ -248,15 +248,58 @@ REQUIRED_COLUMNS = [
     "ScrollIntervalCV", "ScrollBurstDuration", "InterBurstRestDuration", "ScrollRhythmEntropy",
     "UniqueAudioCount", "RepeatContentFlag", "ContentRepeatRate",
     "CircadianPhase", "SleepProxyScore", "EstimatedSleepDurationH", "ConsistencyScore", "IsWeekend",
-    "PostSessionRating", "IntendedAction", "ActualVsIntendedMatch", "RegretScore", "MoodBefore", "MoodAfter", "MoodDelta",
+    "After closing Instagram I feel...", "Why are you opening this?", "ActualVsIntendedMatch", "Did this session go as intended?", "Right now I feel...", "MoodAfter", "MoodDelta",
     "SleepStart", "SleepEnd",
-    "PreviousContext", "DelayedRegretScore", "ComparativeRating", "MorningRestScore"
+    "What were you just doing?", "DelayedRegretScore", "This session was...", "MorningRestScore"
 ]
 
 class SchemaError(Exception):
     pass
 
+# Legacy column names from schema v4 / synthetic CSVs → modern REQUIRED_COLUMNS names.
+# When the CSV on-device was recorded with an older header, rename instead of crashing.
+LEGACY_COLUMN_MAP = {
+    "PostSessionRating":  "After closing Instagram I feel...",
+    "IntendedAction":     "Why are you opening this?",
+    "RegretScore":        "Did this session go as intended?",
+    "MoodBefore":         "Right now I feel...",
+    "PreviousContext":    "What were you just doing?",
+    "ComparativeRating":  "This session was...",
+}
+
+# Safe defaults for any required columns still missing after legacy rename.
+# Text columns get "-", numeric columns get 0.
+_COLUMN_DEFAULTS = {
+    "After closing Instagram I feel...": 0,
+    "Why are you opening this?":         "-",
+    "Did this session go as intended?":  0,
+    "Right now I feel...":               0,
+    "What were you just doing?":         "-",
+    "This session was...":               0,
+    "ActualVsIntendedMatch":             0,
+    "MoodAfter":                         0,
+    "MoodDelta":                         0,
+    "SleepStart":                        23,
+    "SleepEnd":                          7,
+    "DelayedRegretScore":                0,
+    "MorningRestScore":                  0,
+}
+
+def normalize_csv_columns(df):
+    """Rename legacy column names → modern names, then backfill any remaining gaps."""
+    rename = {old: new for old, new in LEGACY_COLUMN_MAP.items()
+              if old in df.columns and new not in df.columns}
+    if rename:
+        df.rename(columns=rename, inplace=True)
+
+    for col in REQUIRED_COLUMNS:
+        if col not in df.columns:
+            df[col] = _COLUMN_DEFAULTS.get(col, 0)
+
+    return df
+
 def validate_csv_schema(df):
+    normalize_csv_columns(df)
     missing_cols = set(REQUIRED_COLUMNS) - set(df.columns)
     if missing_cols:
         raise SchemaError(f"Missing columns: {missing_cols}. Update InstaAccessibilityService or REQUIRED_COLUMNS.")
@@ -494,8 +537,8 @@ def preprocess_session(df):
         'AmbientLuxStart': 50.0,
         'IsCharging': 0.0,
         'CircadianPhase': 0.5,
-        'PostSessionRating': 0.0,
-        'RegretScore': 0.0,
+        'After closing Instagram I feel...': 0.0,
+        'Did this session go as intended?': 0.0,
         'MoodDelta': 0.0,
         'MorningRestScore': 0.0,
         # NOTE: TimeSinceLastSessionMin = 0 means "gap not tracked by Kotlin" (session end time not
@@ -549,11 +592,11 @@ def preprocess_session(df):
         
     if 'supervised_doom' not in df.columns:
         df['supervised_doom'] = compute_supervised_doom_label(
-            regret_score=float(df['RegretScore'].iloc[0]) if 'RegretScore' in df.columns else 0.0,
+            regret_score=float(df['Did this session go as intended?'].iloc[0]) if 'Did this session go as intended?' in df.columns else 0.0,
             delayed_regret=float(df['DelayedRegretScore'].iloc[0]) if 'DelayedRegretScore' in df.columns else 0.0,
-            comparative_rating=float(df['ComparativeRating'].iloc[0]) if 'ComparativeRating' in df.columns else 0.0,
-            post_session_rating=float(df['PostSessionRating'].iloc[0]) if 'PostSessionRating' in df.columns else 0.0,
-            intended_action=str(df['IntendedAction'].iloc[0]) if 'IntendedAction' in df.columns else "",
+            comparative_rating=float(df['This session was...'].iloc[0]) if 'This session was...' in df.columns else 0.0,
+            post_session_rating=float(df['After closing Instagram I feel...'].iloc[0]) if 'After closing Instagram I feel...' in df.columns else 0.0,
+            intended_action=str(df['Why are you opening this?'].iloc[0]) if 'Why are you opening this?' in df.columns else "",
             actual_vs_intended_match=float(df['ActualVsIntendedMatch'].iloc[0]) if 'ActualVsIntendedMatch' in df.columns else 2.0,
             mood_delta_raw=float(df['MoodDelta'].iloc[0]) if 'MoodDelta' in df.columns else 0.0
         )
@@ -562,7 +605,7 @@ def preprocess_session(df):
     # When stated intent was low-risk but behavior was high-capture, 
     # this is high-confidence doom regardless of self-report
     if 'intent_mismatch' not in df.columns:
-        intended = str(df['IntendedAction'].iloc[0]) if 'IntendedAction' in df.columns else ""
+        intended = str(df['Why are you opening this?'].iloc[0]) if 'Why are you opening this?' in df.columns else ""
         low_risk_intents = ['Quick break (intentional)', 'Specific content lookup']
         if intended in low_risk_intents:
             # FIXED: Use effective_session_reel_count for consistency with CumulativeReels tracking
@@ -1238,8 +1281,8 @@ class DoomScorer:
             ds = max(ds, 0.35)
         
         # FIX (Bug 9): additive amplifiers, not multiplicative chain
-        post_rating        = session_df['PostSessionRating'].iloc[0]    if 'PostSessionRating'    in session_df else 0
-        regret             = session_df['RegretScore'].iloc[0]           if 'RegretScore'          in session_df else 0
+        post_rating        = session_df['After closing Instagram I feel...'].iloc[0]    if 'After closing Instagram I feel...'    in session_df else 0
+        regret             = session_df['Did this session go as intended?'].iloc[0]           if 'Did this session go as intended?'          in session_df else 0
         focus_after        = session_df['MoodAfter'].iloc[0]             if 'MoodAfter'            in session_df else 0
         actual_vs_intended = session_df['ActualVsIntendedMatch'].iloc[0] if 'ActualVsIntendedMatch' in session_df else 2
         intent_mismatch    = session_df['intent_mismatch'].iloc[0]       if 'intent_mismatch'      in session_df else 0
@@ -1707,9 +1750,9 @@ class ReelioCLSE:
         PostSessionRating alone = Low confidence (affective only, no cognitive anchor).
         """
         has_delayed = df['DelayedRegretScore'].iloc[0] > 0 if 'DelayedRegretScore' in df.columns else False
-        has_comp = df['ComparativeRating'].iloc[0] != 0 if 'ComparativeRating' in df.columns else False
-        has_imm = df['RegretScore'].iloc[0] > 0 if 'RegretScore' in df.columns else False
-        has_post = float(df['PostSessionRating'].iloc[0]) > 0 if 'PostSessionRating' in df.columns else False
+        has_comp = df['This session was...'].iloc[0] != 0 if 'This session was...' in df.columns else False
+        has_imm = df['Did this session go as intended?'].iloc[0] > 0 if 'Did this session go as intended?' in df.columns else False
+        has_post = float(df['After closing Instagram I feel...'].iloc[0]) > 0 if 'After closing Instagram I feel...' in df.columns else False
 
         if has_delayed and has_comp: return 1.00
         if has_delayed: return 0.85
@@ -1963,18 +2006,18 @@ class ReelioCLSE:
         env_ctx = compute_environment_context(df, baseline)
         phase = env_ctx['phase']
         
-        intended    = str(df['IntendedAction'].iloc[0]) if 'IntendedAction' in df.columns else ""
-        prev_ctx    = str(df['PreviousContext'].iloc[0]) if 'PreviousContext' in df.columns else ""
+        intended    = str(df['Why are you opening this?'].iloc[0]) if 'Why are you opening this?' in df.columns else ""
+        prev_ctx    = str(df['What were you just doing?'].iloc[0]) if 'What were you just doing?' in df.columns else ""
 
         # Persist latest survey/label context so delayed-label updates can reuse
         # the same priority chain inputs as preprocess_session.
         self.last_label_snapshot = {
-            'PostSessionRating': float(df['PostSessionRating'].iloc[0]) if 'PostSessionRating' in df.columns else 0.0,
-            'RegretScore': float(df['RegretScore'].iloc[0]) if 'RegretScore' in df.columns else 0.0,
-            'ComparativeRating': float(df['ComparativeRating'].iloc[0]) if 'ComparativeRating' in df.columns else 0.0,
+            'After closing Instagram I feel...': float(df['After closing Instagram I feel...'].iloc[0]) if 'After closing Instagram I feel...' in df.columns else 0.0,
+            'Did this session go as intended?': float(df['Did this session go as intended?'].iloc[0]) if 'Did this session go as intended?' in df.columns else 0.0,
+            'This session was...': float(df['This session was...'].iloc[0]) if 'This session was...' in df.columns else 0.0,
             'DelayedRegretScore': float(df['DelayedRegretScore'].iloc[0]) if 'DelayedRegretScore' in df.columns else 0.0,
             'ActualVsIntendedMatch': float(df['ActualVsIntendedMatch'].iloc[0]) if 'ActualVsIntendedMatch' in df.columns else 2.0,
-            'IntendedAction': intended
+            'Why are you opening this?': intended
         }
         
         # Pre-session Risk Flag: replaces old UsageStats logic (Work/Study) and captures intended avoidance
@@ -1988,7 +2031,7 @@ class ReelioCLSE:
         stress_flag = 1.0 if any(risk_indicators) else 0.0
 
         # Pre-session state risk (supports new stress-state encoding and legacy mood data)
-        mood_before_raw = float(df['MoodBefore'].iloc[0]) if 'MoodBefore' in df.columns else 0.0
+        mood_before_raw = float(df['Right now I feel...'].iloc[0]) if 'Right now I feel...' in df.columns else 0.0
         mood_risk = normalize_prestate_risk(mood_before_raw)
 
         ctx = np.array([
@@ -2317,8 +2360,8 @@ def run_inference_on_latest(csv_data: str, model_state_path: str, survey_data: d
     # Pillar 10 (Extended): Regret Validation
     # Track post-hoc regret scores to detect model mis-calibration
     # FIXED: Pass blended_prob BEFORE bias correction to avoid feedback loop corruption
-    if 'RegretScore' in session_df.columns:
-        regret_score = session_df['RegretScore'].iloc[0]
+    if 'Did this session go as intended?' in session_df.columns:
+        regret_score = session_df['Did this session go as intended?'].iloc[0]
         if regret_score > 0:  # Only record if user provided a regret response
             try:
                 timestamp = session_df['StartTime'].iloc[0] if 'StartTime' in session_df.columns else ""
@@ -2433,8 +2476,8 @@ def run_full_pipeline(csv_path: str, state_path: str = None) -> ReelioCLSE:
 # fingerprint is kept because the async ~30-45s race above is still real.)
 DASHBOARD_REPLAY_CHECKPOINT_VERSION = 1
 _SURVEY_LABEL_COLUMNS = [
-    'PostSessionRating', 'RegretScore', 'MoodBefore', 'MoodAfter',
-    'IntendedAction', 'ActualVsIntendedMatch', 'ComparativeRating'
+    'After closing Instagram I feel...', 'Did this session go as intended?', 'Right now I feel...', 'MoodAfter',
+    'Why are you opening this?', 'ActualVsIntendedMatch', 'This session was...'
 ]
 
 
@@ -2761,7 +2804,7 @@ def run_dashboard_payload(csv_data: str, state_path: str = None, survey_data: di
             # This prevents 1-2 reel sessions from turning a low-activity day "Red" 
             # in the calendar due to HMM state persistence or context alone.
             is_explicitly_labeled = (
-                ('RegretScore' in s_df.columns and pd.notna(s_df['RegretScore'].iloc[0]) and float(s_df['RegretScore'].iloc[0]) > 0) or
+                ('Did this session go as intended?' in s_df.columns and pd.notna(s_df['Did this session go as intended?'].iloc[0]) and float(s_df['Did this session go as intended?'].iloc[0]) > 0) or
                 # DelayedRegretScore is always 0 for new sessions (the delayed-regret survey
                 # feature was removed) but old CSV rows recorded before the removal can still
                 # carry a real value, so this still matters for historical data.
@@ -2852,23 +2895,23 @@ def run_dashboard_payload(csv_data: str, state_path: str = None, survey_data: di
                 "totalInteractions":   total_likes + total_comments + total_shares + total_saves,
                 "interactionRate":     round(interaction_rate, 4),
                 # Survey / self-report labels — backbone of supervised learning
-                "postSessionRating":   int(s_df['PostSessionRating'].iloc[0])   if 'PostSessionRating'   in s_df.columns and pd.notna(s_df['PostSessionRating'].iloc[0])   else 0,
-                "regretScore":         int(s_df['RegretScore'].iloc[0])          if 'RegretScore'         in s_df.columns and pd.notna(s_df['RegretScore'].iloc[0])          else 0,
-                "moodBefore":          int(s_df['MoodBefore'].iloc[0])           if 'MoodBefore'          in s_df.columns and pd.notna(s_df['MoodBefore'].iloc[0])           else 0,
+                "postSessionRating":   int(s_df['After closing Instagram I feel...'].iloc[0])   if 'After closing Instagram I feel...'   in s_df.columns and pd.notna(s_df['After closing Instagram I feel...'].iloc[0])   else 0,
+                "regretScore":         int(s_df['Did this session go as intended?'].iloc[0])          if 'Did this session go as intended?'         in s_df.columns and pd.notna(s_df['Did this session go as intended?'].iloc[0])          else 0,
+                "moodBefore":          int(s_df['Right now I feel...'].iloc[0])           if 'Right now I feel...'          in s_df.columns and pd.notna(s_df['Right now I feel...'].iloc[0])           else 0,
                 "moodAfter":           int(s_df['MoodAfter'].iloc[0])            if 'MoodAfter'           in s_df.columns and pd.notna(s_df['MoodAfter'].iloc[0])            else 0,
-                "intendedAction":      str(s_df['IntendedAction'].iloc[0])       if 'IntendedAction'      in s_df.columns and pd.notna(s_df['IntendedAction'].iloc[0])       else "",
+                "intendedAction":      str(s_df['Why are you opening this?'].iloc[0])       if 'Why are you opening this?'      in s_df.columns and pd.notna(s_df['Why are you opening this?'].iloc[0])       else "",
                 "actualVsIntended":    int(s_df['ActualVsIntendedMatch'].iloc[0]) if 'ActualVsIntendedMatch' in s_df.columns and pd.notna(s_df['ActualVsIntendedMatch'].iloc[0]) else 0,
-                "comparativeRating":   int(s_df['ComparativeRating'].iloc[0])    if 'ComparativeRating'   in s_df.columns and pd.notna(s_df['ComparativeRating'].iloc[0])    else 0,
+                "comparativeRating":   int(s_df['This session was...'].iloc[0])    if 'This session was...'   in s_df.columns and pd.notna(s_df['This session was...'].iloc[0])    else 0,
                 "delayedRegretScore":  int(s_df['DelayedRegretScore'].iloc[0])   if 'DelayedRegretScore'  in s_df.columns and pd.notna(s_df['DelayedRegretScore'].iloc[0])   else 0,
                 "supervisedDoom":      round(float(s_df['supervised_doom'].iloc[0]), 4) if 'supervised_doom' in s_df.columns else 0.0,
             }
 
             # Default hasSurvey computation from CSV-only fields.
             base_has_survey = bool(
-                ('RegretScore' in s_df.columns and pd.notna(s_df['RegretScore'].iloc[0]) and float(s_df['RegretScore'].iloc[0]) > 0) or
-                ('PostSessionRating' in s_df.columns and pd.notna(s_df['PostSessionRating'].iloc[0]) and float(s_df['PostSessionRating'].iloc[0]) > 0) or
+                ('Did this session go as intended?' in s_df.columns and pd.notna(s_df['Did this session go as intended?'].iloc[0]) and float(s_df['Did this session go as intended?'].iloc[0]) > 0) or
+                ('After closing Instagram I feel...' in s_df.columns and pd.notna(s_df['After closing Instagram I feel...'].iloc[0]) and float(s_df['After closing Instagram I feel...'].iloc[0]) > 0) or
                 ('MoodAfter' in s_df.columns and pd.notna(s_df['MoodAfter'].iloc[0]) and float(s_df['MoodAfter'].iloc[0]) > 0) or
-                ('ComparativeRating' in s_df.columns and pd.notna(s_df['ComparativeRating'].iloc[0]) and float(s_df['ComparativeRating'].iloc[0]) > 0)
+                ('This session was...' in s_df.columns and pd.notna(s_df['This session was...'].iloc[0]) and float(s_df['This session was...'].iloc[0]) > 0)
             )
             base_obj["hasSurvey"] = base_has_survey
 

@@ -74,50 +74,71 @@ const {
 } = LucideLib;
 
 const D = {
-    // ── Ground colours ──
-    bg: "#EDE8DF",
-    cream: "#EDE8DF",
-    cardLight: "#F7F3EC",
-    cardWhite: "#FDFAF6",
-    section: "#E4DED4",
-    nav: "#F0EBE2",
-    surface: "#FDFAF6",
-    card: "#F7F3EC",
-    // ── Doom spectrum (only saturated colours) ──
-    safe: "#3A9E6F",
-    warn: "#C4973A",
-    danger: "#C4563A",
-    deepDoom: "#A03030",
-    // ── Brand purple ──
-    purple: "#6B3FA0",
-    purpleDark: "#4A2580",
-    purpleL: "#F3EFFA",
-    brandMedium: "#9B6FCC",
-    brandSoft: "#E8E0F5",
-    brandFaint: "#F3EFFA",
-    // ── Typography on cream ──
-    ink: "#1A1612",
-    ink2: "#6A5E56",
-    ink3: "#9A8E84",
-    inkSoft: "#6A5E56",
-    text: "#1A1612",
-    textBrand: "#6B3FA0",
-    soft: "#9A8E84",
-    muted: "#9A8E84",
-    // ── Borders ──
-    border: "rgba(26,22,18,0.10)",
-    borderSoft: "rgba(26,22,18,0.06)",
-    // ── Semantic aliases (map to doom spectrum) ──
-    info: "#6B3FA0",
-    pink: "#C4563A",
-    coral: "#C4563A",
-    yellow: "#C4973A",
-    blue: "#6B3FA0",
-    green: "#3A9E6F",
-    sage: "#3A9E6F",
-    lavender: "#E8E0F5",
-    peach: "#C4973A",
-    teal: "#3A9E6F",
+    // 1. Color Palette: Warm Linen Paper Ground
+    bg: "#F5F1EA",             // Warm linen / paper tone (#F5F1EA)
+    cream: "#F5F1EA",
+    paper: "#FAF8F5",          // Crisp warm paper background
+    cardLight: "#FAF8F5",
+    cardWhite: "#FFFFFF",
+    section: "#EDE7DC",
+    nav: "#EAE3D5",
+    surface: "#FAF8F5",
+    card: "#FAF8F5",
+
+    // Primary Accent: Dusty Powder Blue (#A8C5D6 range)
+    primary: "#A8C5D6",
+    primaryDark: "#6E93A9",
+    primarySoft: "#EBF2F7",
+    powderBlue: "#A8C5D6",
+    powderBlueDark: "#6E93A9",
+    powderBlueSoft: "#EBF2F7",
+    purple: "#A8C5D6",         // Alias for backward compatibility with active nav state
+    purpleDark: "#6E93A9",
+    purpleL: "#EBF2F7",
+    brandMedium: "#85A8BD",
+    brandSoft: "#EBF2F7",
+    brandFaint: "#F4F8FA",
+
+    // Secondary Accents (Soft, Muted Paper Tones)
+    sage: "#9EB384",           // Soft Sage Green (stat card accent)
+    sageSoft: "#F0F4EC",
+    sageDark: "#6B8252",
+    blush: "#E5C3C6",          // Soft Blush Pink (stat card accent)
+    blushSoft: "#FAF0F2",
+    blushDark: "#B88A8E",
+    peach: "#F7D1BA",          // Muted Peach (stat card accent)
+    peachSoft: "#FAF2EC",
+    peachDark: "#C99A7F",
+    lavender: "#E3DBF0",
+
+    // Soft Charcoal Typography (No Pure Black)
+    ink: "#2D3436",            // Primary soft charcoal
+    ink2: "#545B5E",           // Secondary charcoal
+    ink3: "#7F8C8D",           // Muted charcoal
+    inkSoft: "#545B5E",
+    text: "#2D3436",
+    textBrand: "#6E93A9",
+    soft: "#7F8C8D",
+    muted: "#7F8C8D",
+
+    // Paper Borders & Shadows
+    border: "rgba(45, 52, 54, 0.10)",
+    borderSoft: "rgba(45, 52, 54, 0.06)",
+    paperShadow: "0 4px 16px -2px rgba(45, 52, 54, 0.07), 0 2px 5px -1px rgba(45, 52, 54, 0.04)",
+    paperShadowLift: "0 8px 24px -4px rgba(45, 52, 54, 0.11), 0 3px 8px -2px rgba(45, 52, 54, 0.06)",
+
+    // Calm Semantic Mapping (No Alarmist Reds/Oranges)
+    safe: "#9EB384",           // Gentle Sage
+    warn: "#F7D1BA",           // Muted Peach
+    danger: "#E5C3C6",         // Soft Blush
+    deepDoom: "#D4A5A9",
+    info: "#A8C5D6",           // Powder Blue
+    pink: "#E5C3C6",
+    coral: "#E5C3C6",
+    yellow: "#F7D1BA",
+    blue: "#A8C5D6",
+    green: "#9EB384",
+    teal: "#9EB384",
 };
 
 const Styles = () => (
@@ -131,78 +152,154 @@ const Styles = () => (
             -webkit-touch-callout: none;
         }
 
-    .app-shell {
-      width: 100%;
-      background: #EDE8DF;
-      font-family: 'Nunito', sans-serif;
-      font-weight: 600;
-      color: ${D.text};
-      position: relative;
-      overflow: hidden;
-      max-width: 520px;
-      margin: 0 auto;
-    }
-    .mono  { font-family: 'Space Mono', monospace; }
-    .spacemono { font-family: 'Space Mono', monospace; }
-    .grotesk { font-family: 'Space Grotesk', sans-serif; font-weight: 700; }
+        .app-shell {
+            width: 100%;
+            background: ${D.bg};
+            background-image: 
+                radial-gradient(rgba(45, 52, 54, 0.03) 1.2px, transparent 1.2px),
+                linear-gradient(180deg, #F5F1EA 0%, #EFE8DC 100%);
+            background-size: 18px 18px, 100% 100%;
+            font-family: 'Space Grotesk', 'Nunito', sans-serif;
+            font-weight: 600;
+            color: ${D.text};
+            position: relative;
+            overflow: hidden;
+            max-width: 520px;
+            margin: 0 auto;
+            min-height: 100vh;
+        }
 
-    .scanlines {
-      position: fixed; inset: 0;
-      background: rgba(0,0,0,0.02);
-      pointer-events: none; z-index: 1;
-    }
+        .mono { font-family: 'Space Mono', monospace; }
+        .spacemono { font-family: 'Space Mono', monospace; }
+        .grotesk { font-family: 'Space Grotesk', sans-serif; font-weight: 700; }
 
-    .card {
-      background: ${D.cardWhite};
-      backdrop-filter: blur(8px);
-      -webkit-backdrop-filter: blur(8px);
-      border-radius: 20px;
-      box-shadow: 0 4px 20px rgba(26,22,18,0.06), 0 1px 4px rgba(26,22,18,0.04);
-      border: 1.5px solid ${D.borderSoft};
-      position: relative;
-      overflow: hidden;
-      z-index: 2;
-    }
-    
-    .card::before {
-      content: '';
-      position: absolute;
-      top: 0;
-      left: 0;
-      right: 0;
-      height: 3px;
-            background: rgba(107,63,160,0.15);
-      opacity: 0.5;
-    }
+        .scanlines {
+            position: fixed; inset: 0;
+            background: rgba(0,0,0,0.008);
+            pointer-events: none; z-index: 1;
+        }
 
-    .tab-bar {
-      position: fixed; bottom: 0; left: 0; right: 0;
-      z-index: 100;
-            background: ${D.nav};
-      display: flex;
-      border-radius: 36px 36px 0 0;
-      box-shadow: 0 -2px 16px rgba(26,22,18,0.08);
-      padding: 10px 20px 20px;
-      border-top: 1px solid rgba(26,22,18,0.06);
-      max-width: 520px;
-      margin: 0 auto;
-    }
-    .tab-item {
-      flex: 1; padding: 6px 8px;
-      display: flex; flex-direction: column;
-      align-items: center; gap: 4px;
-      cursor: pointer; border: none;
-      background: transparent; color: ${D.ink3};
-      font-family: 'Space Grotesk', sans-serif; font-size: 9px;
-      font-weight: 800; letter-spacing: 0.04em;
-      transition: all 0.2s;
-      border-radius: 24px;
-    }
-    .tab-item.active { 
-            background: ${D.purple};
-      color: white;
-      transform: scale(1.05);
-    }
+        /* ── 2. Shape Language: Faceted Origami Cards ── */
+        .card, .origami-card {
+            background: ${D.paper};
+            /* Angled top-right paper fold cut */
+            clip-path: polygon(0 0, calc(100% - 16px) 0, 100% 16px, 100% 100%, 0 100%);
+            box-shadow: ${D.paperShadow};
+            border: 1px solid ${D.borderSoft};
+            position: relative;
+            overflow: hidden;
+            z-index: 2;
+            transition: transform 0.22s cubic-bezier(0.34, 1.2, 0.64, 1), box-shadow 0.22s ease;
+        }
+
+        /* Gently-faceted / Hexagonal Card Frame (Hero Card) */
+        .hex-card {
+            background: ${D.paper};
+            clip-path: polygon(14px 0, calc(100% - 14px) 0, 100% 14px, 100% calc(100% - 14px), calc(100% - 14px) 100%, 14px 100%, 0 calc(100% - 14px), 0 14px);
+            box-shadow: ${D.paperShadowLift};
+            border: 1px solid ${D.borderSoft};
+            position: relative;
+            overflow: hidden;
+            z-index: 2;
+            transition: transform 0.22s ease, box-shadow 0.22s ease;
+        }
+
+        /* Subtle Corner Origami Dog-Ear Fold Accent */
+        .card::before, .hex-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            right: 0;
+            width: 0;
+            height: 0;
+            border-style: solid;
+            border-width: 0 16px 16px 0;
+            border-color: transparent rgba(45, 52, 54, 0.08) transparent transparent;
+            pointer-events: none;
+            z-index: 3;
+        }
+
+        .card::after, .hex-card::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            right: 0;
+            width: 0;
+            height: 0;
+            border-style: solid;
+            border-width: 0 15px 15px 0;
+            border-color: transparent ${D.bg} transparent transparent;
+            pointer-events: none;
+            z-index: 4;
+        }
+
+        /* ── Origami Fold Ribbon & Badges ── */
+        .origami-tag {
+            display: inline-flex;
+            align-items: center;
+            padding: 4px 12px;
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 10px;
+            font-weight: 800;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            color: ${D.ink2};
+            background: ${D.powderBlueSoft};
+            border: 1px solid rgba(168, 197, 214, 0.35);
+            clip-path: polygon(0 0, 100% 0, calc(100% - 6px) 50%, 100% 100%, 0 100%);
+            box-shadow: 0 2px 6px rgba(45, 52, 54, 0.04);
+        }
+
+        .origami-tag-sage {
+            background: ${D.sageSoft};
+            border-color: rgba(158, 179, 132, 0.35);
+            color: ${D.sageDark};
+        }
+
+        .origami-tag-blush {
+            background: ${D.blushSoft};
+            border-color: rgba(229, 195, 198, 0.35);
+            color: ${D.blushDark};
+        }
+
+        .origami-tag-peach {
+            background: ${D.peachSoft};
+            border-color: rgba(247, 209, 186, 0.35);
+            color: ${D.peachDark};
+        }
+
+        /* ── Origami Tab Bar Ribbon ── */
+        .tab-bar {
+            position: fixed; bottom: 0; left: 0; right: 0;
+            z-index: 100;
+            background: linear-gradient(180deg, #F5F1EA 0%, #EAE3D5 100%);
+            display: flex;
+            clip-path: polygon(12px 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 0 100%, 0 12px);
+            box-shadow: 0 -6px 20px -2px rgba(45, 52, 54, 0.08);
+            padding: 10px 16px 20px;
+            border-top: 1px solid rgba(45, 52, 54, 0.08);
+            max-width: 520px;
+            margin: 0 auto;
+        }
+
+        .tab-item {
+            flex: 1; padding: 8px;
+            display: flex; flex-direction: column;
+            align-items: center; gap: 4px;
+            cursor: pointer; border: none;
+            background: transparent; color: ${D.ink3};
+            font-family: 'Space Grotesk', sans-serif; font-size: 10px;
+            font-weight: 700; letter-spacing: 0.04em;
+            transition: all 0.2s ease;
+            clip-path: polygon(6px 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 0 100%, 0 6px);
+        }
+
+        .tab-item.active { 
+            background: ${D.powderBlue};
+            color: ${D.ink};
+            box-shadow: 0 4px 12px rgba(168, 197, 214, 0.45);
+            transform: translateY(-2px);
+        }
 
     .sub-tabs {
       display: flex;
@@ -214,10 +311,10 @@ const Styles = () => (
     .sub-tabs::-webkit-scrollbar { display: none; }
 
     .sub-tab {
-      border: 2px solid ${D.borderSoft};
-      background: ${D.cardWhite};
+      border: 1px solid rgba(26,22,18,0.10);
+      background: linear-gradient(145deg, #FFFFFF 0%, #F7F2EA 100%);
       color: ${D.ink2};
-      border-radius: 999px;
+      border-radius: 20px;
       padding: 10px 18px;
       font-size: 12px;
       font-weight: 800;
@@ -226,15 +323,15 @@ const Styles = () => (
       white-space: nowrap;
       cursor: pointer;
       transition: all 0.2s cubic-bezier(0.34,1.2,0.64,1);
-      box-shadow: 0 2px 8px rgba(26,22,18,0.04);
+      box-shadow: 0 3px 10px rgba(26,22,18,0.05);
     }
 
     .sub-tab.active {
       border-color: transparent;
       color: white;
-            background: ${D.purple};
-      box-shadow: 0 5px 20px rgba(107,63,160,0.3);
-      transform: scale(1.06) translateY(-1px);
+      background: linear-gradient(135deg, ${D.purple} 0%, ${D.purpleDark} 100%);
+      box-shadow: 0 6px 18px rgba(107,63,160,0.35);
+      transform: scale(1.05) translateY(-1px);
     }
     
     .sub-tab:hover:not(.active) {
@@ -246,14 +343,19 @@ const Styles = () => (
     .btn-primary {
       width: 100%;
       padding: 14px;
-      border-radius: 12px;
-      border: none;
+      border-radius: 18px;
+      border: 1px solid rgba(255,255,255,0.2);
       cursor: pointer;
       font-family: 'Space Grotesk', sans-serif;
       font-size: 14px;
       font-weight: 700;
-            background: ${D.purple};
+      background: linear-gradient(135deg, ${D.purple} 0%, ${D.purpleDark} 100%);
       color: ${D.cardWhite};
+      box-shadow: 0 6px 18px rgba(107,63,160,0.3);
+      transition: transform 0.15s, box-shadow 0.15s;
+    }
+    .btn-primary:active {
+      transform: scale(0.98);
     }
 
     .chip-strip {
@@ -632,44 +734,45 @@ const parseActiveTimeSeconds = (str, fallback = 0) => {
 
 const getRiskMeta = (score) => {
     const s = safeNum(score, 0);
-    if (s >= 70) return { label: "CRITICAL", color: D.danger, hint: "Exit Instagram 2 reels earlier than you want to" };
-    if (s >= 45) return { label: "ELEVATED", color: D.warn, hint: "Watch your session length today" };
-    if (s >= 25) return { label: "STABLE", color: D.info, hint: "You're building a good pattern" };
-    return { label: "SAFE", color: D.safe, hint: "Great consistency this week" };
+    if (s >= 70) return { label: "PAUSE & REFLECT", color: D.blushDark, hint: "A gentle break can refresh your mind" };
+    if (s >= 45) return { label: "BUILDING MINDFULNESS", color: D.peachDark, hint: "Notice how your focus feels right now" };
+    if (s >= 25) return { label: "PEACEFUL FLOW", color: D.powderBlueDark, hint: "You're keeping a gentle, steady pace" };
+    return { label: "MINDFUL CALM", color: D.sageDark, hint: "Lovely focus and balance today" };
 };
 
 function getHeroSummary(data) {
     const score = safeNum(data.captureRiskScore, 0);
     const sessionsToday = safeNum(data.sessionsToday, 0);
     const capturedSessions = safeNum(data.capturedSessionsToday, 0);
+    const mindfulSessions = Math.max(0, sessionsToday - capturedSessions);
     const capturedPct = sessionsToday > 0 ? Math.round((capturedSessions / sessionsToday) * 100) : null;
     const peakWindow = typeof data.peakRiskWindow === "string" ? data.peakRiskWindow : null;
     const safeWindow = typeof data.safestWindow === "string" ? data.safestWindow : null;
 
     if (sessionsToday === 0) {
         return {
-            headline: "No sessions tracked today yet.",
-            subtext: "Open Instagram as usual. Reelio will update your score after your next session.",
-            color: D.info
+            headline: "Fold your mind into calm.",
+            subtext: "No sessions tracked yet today. Open Instagram when ready, Reelio keeps your pace light.",
+            color: D.powderBlueDark
         };
     }
     if (score >= 70) {
         return {
-            headline: "High autopilot risk right now.",
-            subtext: `Captured in ${capturedSessions}/${sessionsToday} sessions${capturedPct !== null ? ` (${capturedPct}%)` : ""}${peakWindow ? `. Peak risk window: ${peakWindow}.` : "."}`,
-            color: D.danger
+            headline: "Fold your mind into calm.",
+            subtext: `${mindfulSessions} of ${sessionsToday} sessions mindful today${safeWindow ? `. Your most balanced window: ${safeWindow}.` : "."}`,
+            color: D.blushDark
         };
     } else if (score >= 45) {
         return {
-            headline: "Mixed signals today.",
-            subtext: `Captured in ${capturedSessions}/${sessionsToday} sessions${capturedPct !== null ? ` (${capturedPct}%)` : ""}${safeWindow ? `. Lowest-risk window: ${safeWindow}.` : "."}`,
-            color: D.warn
+            headline: "Finding your balance.",
+            subtext: `${mindfulSessions} of ${sessionsToday} sessions mindful today${safeWindow ? `. Most peaceful window: ${safeWindow}.` : "."}`,
+            color: D.peachDark
         };
     }
     return {
-        headline: "You are staying in control.",
-        subtext: `Only ${capturedSessions} of ${sessionsToday} sessions crossed into autopilot${safeWindow ? `. Your lowest-risk window is ${safeWindow}.` : "."}`,
-        color: D.safe
+        headline: "A peaceful rhythm today.",
+        subtext: `${mindfulSessions} of ${sessionsToday} sessions mindful today${safeWindow ? `. Best flow window: ${safeWindow}.` : "."}`,
+        color: D.sageDark
     };
 }
 
@@ -797,6 +900,66 @@ const FactorIcon = ({ type, size = 22, color = "white" }) => {
     }
 };
 
+// ─── 3. Iconography & Mascot Components ──────────────────────────────────────
+
+const OrigamiCraneIcon = ({ size = 26, color = "#6E93A9" }) => (
+    <svg width={size} height={size} viewBox="0 0 64 64" fill="none" style={{ display: 'inline-block', verticalAlign: 'middle' }}>
+        <polygon points="32,8 54,28 32,24" fill={color} opacity="0.9" />
+        <polygon points="32,8 10,28 32,24" fill={color} opacity="0.75" />
+        <polygon points="32,24 54,28 32,56" fill={color} opacity="0.6" />
+        <polygon points="32,24 10,28 32,56" fill={color} opacity="0.4" />
+        <polygon points="32,8 44,20 32,24" fill="#FFFFFF" opacity="0.4" />
+        <line x1="32" y1="8" x2="32" y2="56" stroke={color} strokeWidth="1.5" opacity="0.8" />
+    </svg>
+);
+
+const OrigamiMascot = ({ mood = "calm", size = 115 }) => {
+    return (
+        <svg width={size} height={size} viewBox="0 0 100 100" fill="none" style={{ display: 'block', margin: '0 auto' }}>
+            <defs>
+                <linearGradient id="origamiBodyGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stopColor="#C4DFEE" />
+                    <stop offset="60%" stopColor="#A8C5D6" />
+                    <stop offset="100%" stopColor="#8DAEC3" />
+                </linearGradient>
+                <linearGradient id="origamiEarGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stopColor="#EBF2F7" />
+                    <stop offset="100%" stopColor="#C4DFEE" />
+                </linearGradient>
+            </defs>
+
+            {/* Left Ear Fold */}
+            <polygon points="22,18 42,42 16,46" fill="url(#origamiEarGrad)" />
+            <polygon points="22,18 34,36 16,46" fill="rgba(255,255,255,0.4)" />
+
+            {/* Right Ear Fold */}
+            <polygon points="78,18 84,46 58,42" fill="url(#origamiEarGrad)" />
+            <polygon points="78,18 84,46 66,36" fill="rgba(45,52,54,0.08)" />
+
+            {/* Main Head Fold (Faceted Fox/Dog Face) */}
+            <polygon points="50,22 84,46 50,84" fill="url(#origamiBodyGrad)" />
+            <polygon points="50,22 16,46 50,84" fill="url(#origamiBodyGrad)" opacity="0.85" />
+
+            {/* Facet Shadows for 3D Origami Depth */}
+            <polygon points="50,22 50,84 66,48" fill="rgba(255,255,255,0.25)" />
+            <polygon points="50,22 50,84 34,48" fill="rgba(45,52,54,0.08)" />
+
+            {/* Folded Snout / Nose Origami Piece */}
+            <polygon points="50,56 62,72 50,84" fill="#6E93A9" />
+            <polygon points="50,56 38,72 50,84" fill="#5A7D93" />
+            <polygon points="50,78 54,84 46,84" fill="#2D3436" />
+
+            {/* Friendly Gentle Closed Eyes (Calm & Encouraging) */}
+            <path d="M 32 46 Q 38 52 44 46" stroke="#2D3436" strokeWidth="3" strokeLinecap="round" fill="none" />
+            <path d="M 56 46 Q 62 52 68 46" stroke="#2D3436" strokeWidth="3" strokeLinecap="round" fill="none" />
+
+            {/* Gentle Blush Cheeks */}
+            <circle cx="30" cy="54" r="5" fill="#E5C3C6" opacity="0.65" />
+            <circle cx="70" cy="54" r="5" fill="#E5C3C6" opacity="0.65" />
+        </svg>
+    );
+};
+
 // ─── Exports ──────────────────────────────────────────────────────────────────
 export {
     // React hooks
@@ -811,8 +974,9 @@ export {
     Target, Sparkles,
     // Constants & styles
     D, Styles,
-    // UI components
+    // UI components & Mascot
     Label, EmptyState, CollapsibleSection, StatusPill, InsightBox, FactorIcon,
+    OrigamiCraneIcon, OrigamiMascot,
     // Utilities
     isFiniteNumber, safeNum, maybeNum, safeArr, averageOf, sumOf,
     formatHour, formatHourWindow, normalizeDateKey, pickSessionTimestampMs,

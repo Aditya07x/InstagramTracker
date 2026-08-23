@@ -53,7 +53,6 @@ import java.util.concurrent.TimeUnit
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
 import com.example.instatracker.db.AppDatabase
-import com.example.instatracker.db.SessionEntity
 
 class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
 
@@ -1599,16 +1598,16 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
                             val py = Python.getInstance()
                             val reelioModule = py.getModule("reelio_alse")
 
-                            val file = File(filesDir, "insta_data.csv")
-                            val cappedCsv = if (file.exists()) {
-                                val lines = file.readLines()
+                            val fullCsv = DatabaseProvider.getCsvString(this@InstaAccessibilityService)
+                            val cappedCsv = if (fullCsv.isNotBlank()) {
+                                val lines = fullCsv.lines()
                                 if (lines.size > 2) {
                                     val header1 = lines[0] // SCHEMA_VERSION
                                     val header2 = lines[1] // Column names
-                                    val dataLines = lines.drop(2)
+                                    val dataLines = lines.drop(2).filter { it.isNotBlank() }
                                     (listOf(header1, header2) + dataLines.takeLast(200)).joinToString("\n")
                                 } else {
-                                    lines.joinToString("\n")
+                                    fullCsv
                                 }
                             } else ""
 
@@ -1684,37 +1683,7 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
                     }
                 }
 
-                val db = DatabaseProvider.getDatabase(this@InstaAccessibilityService)
-                // Use the pre-generated UUID if available (survey sessions),
-                // otherwise generate a new one (non-survey sessions).
                 val sessionUuid = preGeneratedUuid ?: UUID.randomUUID().toString()
-                val dbSession = SessionEntity(
-                    sessionId = sessionUuid,
-                    sessionStart = sTime,
-                    sessionEnd = eTime,
-                    durationSeconds = durSec,
-                    timeOfDayCategory = timeCat,
-                    isLateNight = isLate,
-                    totalScrolls = tScrolls,
-                    maxReelStreak = mReelSt,
-                    burstCount = 0,
-                    scrollsPerMinute = 0f,
-                    likeCount = 0, commentClickCount = 0, shareCount = 0, immersionScore = 0f,
-                    totalReelsViewed = rCount, avgReelExposure = 0f, maxReelExposure = 0f,
-                    meanScrollInterval = mInterval, scrollIntervalVariance = 0f,
-                    peakAcceleration = peakAccel, velocityProxy = 0f, maxVelocityProxy = 0f,
-                    avgBurstDuration = maxBurst, maxBurstDuration = maxBurst,
-                    sessionDwellTrend = 0f, earlyVsLateRatio = 0f, interactionRate = 0f, interactionDropoff = 0f, scrollIntervalCV = 0f, scrollRhythmEntropy = 0f,
-                    sessionsToday = sToday, totalDwellTodayMin = totDwell, longestSessionTodayReels = mReelSt,
-                    lastSessionDoomScore = doomScore, rollingDoomRate7d = 0f, doomStreakLength = doomSt, morningSessionExists = mSession,
-                    circadianPhase = cPhase, sleepProxyScore = sProxy, estimatedSleepDurationH = estimatedSleepDurationH, consistencyScore = constSc,
-                    postSessionRating = rat, intendedAction = act, actualVsIntendedMatch = mat, regretScore = reg, moodBefore = mBf, moodAfter = mAf, moodDelta = mDl
-                )
-                db.sessionDao().insert(dbSession)
-                
-                // For non-survey sessions, store UUID in case it's needed.
-                // For survey sessions, UUID was already written synchronously
-                // before the notification was shown.
                 if (preGeneratedUuid == null) {
                     getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
                         .putString("pending_survey_session_uuid", sessionUuid)
@@ -2125,12 +2094,16 @@ class InstaAccessibilityService : AccessibilityService(), SensorEventListener {
 
     private fun appendToCsv(line: String) {
         synchronized(GLOBAL_PYTHON_LOCK) {
-            val file = File(filesDir, "insta_data.csv")
             try {
-               if (!file.exists()) ensureCsvHeader()
-               file.appendText(line + "\n")
+                val db = DatabaseProvider.getDatabase(this@InstaAccessibilityService)
+                val row = com.example.instatracker.db.CsvRowEntity(
+                    sessionNumber = currentSessionNumber,
+                    timestamp = System.currentTimeMillis(),
+                    csvLine = line
+                )
+                db.csvRowDao().insert(row)
             } catch (e: Exception) {
-               Log.e("CSV", "Error writing csv", e)
+                Log.e("SQLite", "Error inserting csv row into database", e)
             }
         }
     }

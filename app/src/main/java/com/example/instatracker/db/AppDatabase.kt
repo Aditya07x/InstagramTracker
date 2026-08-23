@@ -5,11 +5,11 @@ import androidx.room.RoomDatabase
 
 @Database(
     entities = [
-        SessionEntity::class
+        CsvRowEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
-    abstract fun sessionDao(): SessionDao
+    abstract fun csvRowDao(): CsvRowDao
 }

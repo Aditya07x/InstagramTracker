@@ -157,9 +157,9 @@ def build_derived_features(csv_path: str) -> pd.DataFrame:
     
     # FIX-02: Mood Delta (Without normalization)
     df['MoodDelta'] = 0.0
-    if 'MoodBefore' in df.columns and 'MoodAfter' in df.columns:
-        mood_mask = (df['MoodBefore'] > 0) & (df['MoodAfter'] > 0)
-        df.loc[mood_mask, 'MoodDelta'] = df.loc[mood_mask, 'MoodAfter'] - df.loc[mood_mask, 'MoodBefore']
+    if 'Right now I feel...' in df.columns and 'MoodAfter' in df.columns:
+        mood_mask = (df['Right now I feel...'] > 0) & (df['MoodAfter'] > 0)
+        df.loc[mood_mask, 'MoodDelta'] = df.loc[mood_mask, 'MoodAfter'] - df.loc[mood_mask, 'Right now I feel...']
         
     # FIX-07: Battery Delta cleanup
     if 'IsCharging' in df.columns and 'BatteryDeltaPerSession' in df.columns:
