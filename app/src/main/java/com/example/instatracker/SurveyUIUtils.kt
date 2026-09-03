@@ -837,6 +837,151 @@ object SurveyUIUtils {
         }
     }
 
+    // ── Fresh editorial MCQ card (clean neutral surface, letter badge, no AI cliches) ─
+    fun createMcqCard(
+        context: Context,
+        label: String,
+        letter: String = "",
+        onClick: () -> Unit
+    ): LinearLayout {
+        val baseCardColor = c("#FAF7F2")
+        val borderNeutral = c("#DCD5CB")
+        val activeBg = c("#221C18")
+        val activeIndexBg = c("#38302A")
+        val normalIndexBg = c("#EFE8DE")
+
+        return LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            val hPad = dp(context, 18f)
+            val vPad = dp(context, 16f)
+            setPadding(hPad, vPad, hPad, vPad)
+            minimumHeight = dp(context, 56f)
+
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dpF(context, 14f)
+                setColor(baseCardColor)
+                setStroke(dp(context, 1f), borderNeutral)
+            }
+
+            val lp = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            lp.bottomMargin = dp(context, 10f)
+            layoutParams = lp
+
+            // Letter indicator badge (A, B, C...)
+            val badgeSize = dp(context, 26f)
+            val indexPill = TextView(context).apply {
+                text = letter
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+                setTextColor(c("#7A6F65"))
+                typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+                gravity = Gravity.CENTER
+                val badgeLp = LinearLayout.LayoutParams(badgeSize, badgeSize)
+                badgeLp.rightMargin = dp(context, 14f)
+                layoutParams = badgeLp
+                background = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setColor(normalIndexBg)
+                }
+            }
+
+            val textView = TextView(context).apply {
+                text = label
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+                setTextColor(c(TEXT))
+                typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+                setLineSpacing(dpF(context, 2f), 1f)
+                layoutParams = LinearLayout.LayoutParams(
+                    0,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    1f
+                )
+            }
+
+            val chevron = TextView(context).apply {
+                text = "›"
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
+                setTextColor(c("#B8AEA2"))
+                val chevLp = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                )
+                chevLp.leftMargin = dp(context, 8f)
+                layoutParams = chevLp
+            }
+
+            if (letter.isNotEmpty()) {
+                addView(indexPill)
+            }
+            addView(textView)
+            addView(chevron)
+
+            alpha = 0f
+            translationY = dpF(context, 16f)
+
+            setOnClickListener {
+                performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                animateMcqTap(this, indexPill, textView, chevron, activeBg, activeIndexBg, onClick)
+            }
+        }
+    }
+
+    private fun animateMcqTap(
+        view: LinearLayout,
+        indexPill: TextView,
+        textView: TextView,
+        chevron: TextView,
+        activeBg: Int,
+        activeIndexBg: Int,
+        onClick: () -> Unit
+    ) {
+        val parent = view.parent as? LinearLayout
+        parent?.let {
+            for (i in 0 until it.childCount) {
+                val sibling = it.getChildAt(i)
+                if (sibling != view && sibling is LinearLayout) {
+                    sibling.animate().alpha(0.38f).setDuration(120).start()
+                }
+            }
+        }
+
+        view.animate()
+            .scaleX(0.985f)
+            .scaleY(0.985f)
+            .setDuration(70)
+            .setInterpolator(DecelerateInterpolator())
+            .withEndAction {
+                view.background = GradientDrawable().apply {
+                    shape = GradientDrawable.RECTANGLE
+                    cornerRadius = dpF(view.context, 14f)
+                    setColor(activeBg)
+                    setStroke(dp(view.context, 1.2f), activeBg)
+                }
+                textView.setTextColor(Color.WHITE)
+                chevron.setTextColor(Color.parseColor("#A89F95"))
+                indexPill.setTextColor(Color.WHITE)
+                indexPill.background = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setColor(activeIndexBg)
+                }
+
+                view.animate()
+                    .scaleX(1f)
+                    .scaleY(1f)
+                    .setDuration(110)
+                    .setInterpolator(AccelerateDecelerateInterpolator())
+                    .withEndAction {
+                        view.postDelayed({ onClick() }, 140)
+                    }
+                    .start()
+            }
+            .start()
+    }
+
     fun staggerCards(parent: LinearLayout, startIndex: Int, count: Int) {
         for (i in 0 until count) {
             val child = parent.getChildAt(startIndex + i) ?: continue

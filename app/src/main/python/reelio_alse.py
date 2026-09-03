@@ -583,13 +583,12 @@ def preprocess_session(df):
     if 'exit_flag' not in df.columns:
         exit_attempts = pd.to_numeric(df['AppExitAttempts'], errors='coerce').fillna(0.0).clip(lower=0.0)
         df['exit_flag'] = np.log1p(exit_attempts)
-    if 'dwell_pctile' not in df.columns:
-        if 'DwellTimePctile' in df.columns and not df['DwellTimePctile'].isna().all():
-            df['dwell_pctile'] = pd.to_numeric(df['DwellTimePctile'], errors='coerce').fillna(df['DwellTimePctile'].median())
+    if 'interaction_burstiness' not in df.columns:
+        if 'InteractionBurstiness' in df.columns:
+            df['interaction_burstiness'] = pd.to_numeric(df['InteractionBurstiness'], errors='coerce').fillna(0.0)
         else:
-            dwell_rank = pd.to_numeric(df['DwellTime'], errors='coerce').rank(pct=True).fillna(0.5)
-            df['dwell_pctile'] = 100.0 * dwell_rank
-        
+            df['interaction_burstiness'] = 0.0
+
     if 'supervised_doom' not in df.columns:
         df['supervised_doom'] = compute_supervised_doom_label(
             regret_score=float(df['Did this session go as intended?'].iloc[0]) if 'Did this session go as intended?' in df.columns else 0.0,
@@ -1365,7 +1364,7 @@ class ReelioCLSE:
         
         self.h = np.array([0.15, 0.05])
         
-        self.num_features = 7  # Revised emission set: dwell, speed, rhythm, rewatch, exit, dwell_pctile, scroll_cv
+        self.num_features = 7  # Revised emission set: dwell, speed, rhythm, rewatch, exit, interaction_burstiness, scroll_cv
         self.feature_weights = np.ones(self.num_features) / self.num_features
         self.feature_mask = np.ones(self.num_features, dtype=bool)
         
@@ -1991,12 +1990,12 @@ class ReelioCLSE:
         if 'rewatch_intensity' not in df.columns:
             backscroll = pd.to_numeric(df['BackScrollCount'], errors='coerce').fillna(0.0).clip(lower=0.0)
             df['rewatch_intensity'] = np.log1p(backscroll)
-        if 'dwell_pctile' not in df.columns:
-            if 'DwellTimePctile' in df.columns:
-                df['dwell_pctile'] = pd.to_numeric(df['DwellTimePctile'], errors='coerce').fillna(50.0)
+        if 'interaction_burstiness' not in df.columns:
+            if 'InteractionBurstiness' in df.columns:
+                df['interaction_burstiness'] = pd.to_numeric(df['InteractionBurstiness'], errors='coerce').fillna(0.0)
             else:
-                df['dwell_pctile'] = 100.0 * pd.to_numeric(df['DwellTime'], errors='coerce').rank(pct=True).fillna(0.5)
-        obs = df[['log_dwell', 'log_speed', 'rhythm_dissociation', 'rewatch_intensity', 'exit_flag', 'dwell_pctile', 'scroll_interval_cv']].values
+                df['interaction_burstiness'] = 0.0
+        obs = df[['log_dwell', 'log_speed', 'rhythm_dissociation', 'rewatch_intensity', 'exit_flag', 'interaction_burstiness', 'scroll_interval_cv']].values
         
         if self.n_sessions_seen == 0:
             self._initialize_from_data(df, baseline)
@@ -3035,7 +3034,7 @@ def run_dashboard_payload(csv_data: str, state_path: str = None, survey_data: di
             "rhythm_dissociation": float(model.feature_weights[2]),
             "rewatch_intensity":   float(model.feature_weights[3]),
             "exit_flag":           float(model.feature_weights[4]),
-            "dwell_pctile":        float(model.feature_weights[5]),
+            "interaction_burstiness": float(model.feature_weights[5]),
             "scroll_interval_cv":  float(model.feature_weights[6]) if len(model.feature_weights) > 6 else 0.0,
         },
         "scorer_component_weights": {

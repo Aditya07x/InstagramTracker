@@ -53,23 +53,25 @@ class IntentionProbeActivity : Activity() {
         layout.addView(SurveyUIUtils.createSubtitle(this, "take a moment to check in"))
 
         val stressOptions = listOf(
-            SurveyUIUtils.KnobOption("Calm and focused", "#3A9E6F") to 1,
-            SurveyUIUtils.KnobOption("A bit restless or bored", "#6B3FA0") to 6,
-            SurveyUIUtils.KnobOption("Stressed or overwhelmed", "#C4563A") to 10,
-            SurveyUIUtils.KnobOption("Tired / winding down", "#9B6FCC") to 7,
-            SurveyUIUtils.KnobOption("Fine, just taking a break", "#C4973A") to 2
+            "Calm and focused" to 1,
+            "Fine, just taking a break" to 2,
+            "A bit restless or bored" to 6,
+            "Tired / winding down" to 7,
+            "Stressed or overwhelmed" to 10
         )
 
-        layout.addView(
-            SurveyUIUtils.createChoiceKnob(
-                this,
-                stressOptions.map { it.first },
-                hint = "where are you starting from?"
-            ) { index ->
-                moodBefore = stressOptions[index].second
-                showContextPrompt()
-            }
-        )
+        val letters = listOf("A", "B", "C", "D", "E")
+        val startIndex = layout.childCount
+        stressOptions.forEachIndexed { i, (label, score) ->
+            val letter = letters.getOrElse(i) { "${i + 1}" }
+            layout.addView(
+                SurveyUIUtils.createMcqCard(this, label, letter) {
+                    moodBefore = score
+                    showContextPrompt()
+                }
+            )
+        }
+        SurveyUIUtils.staggerCards(layout, startIndex, stressOptions.size)
 
         layout.addView(SurveyUIUtils.createSkipButton(this) {
             moodBefore = 0
@@ -93,24 +95,26 @@ class IntentionProbeActivity : Activity() {
         layout.addView(SurveyUIUtils.createSubtitle(this, "what was happening before you opened up?"))
 
         val contexts = listOf(
-            SurveyUIUtils.KnobOption("Work / Study", "#6B3FA0"),
-            SurveyUIUtils.KnobOption("Socializing", "#9B6FCC"),
-            SurveyUIUtils.KnobOption("Relaxing", "#3A9E6F"),
-            SurveyUIUtils.KnobOption("Chores / Task", "#C4973A"),
-            SurveyUIUtils.KnobOption("Just woke up", "#6366F1"),
-            SurveyUIUtils.KnobOption("Boredom", "#8C7F73")
+            "Relaxing",
+            "Socializing",
+            "Just woke up",
+            "Work / Study",
+            "Chores / Task",
+            "Boredom"
         )
 
-        layout.addView(
-            SurveyUIUtils.createChoiceKnob(
-                this,
-                contexts,
-                hint = "what were you in the middle of?"
-            ) { index ->
-                previousContext = contexts[index].label
-                showIntentionPrompt()
-            }
-        )
+        val letters = listOf("A", "B", "C", "D", "E", "F")
+        val startIndex = layout.childCount
+        contexts.forEachIndexed { i, label ->
+            val letter = letters.getOrElse(i) { "${i + 1}" }
+            layout.addView(
+                SurveyUIUtils.createMcqCard(this, label, letter) {
+                    previousContext = label
+                    showIntentionPrompt()
+                }
+            )
+        }
+        SurveyUIUtils.staggerCards(layout, startIndex, contexts.size)
 
         layout.addView(SurveyUIUtils.createSkipButton(this) {
             previousContext = "unknown"
@@ -133,24 +137,26 @@ class IntentionProbeActivity : Activity() {
         layout.addView(SurveyUIUtils.createGradientTitle(this, "Why are you opening this?", "#6B3FA0"))
         layout.addView(SurveyUIUtils.createSubtitle(this, "knowing this helps you notice patterns"))
 
-        val options = listOf(
-            SurveyUIUtils.KnobOption("Bored / Nothing to do", "#C4973A"),
-            SurveyUIUtils.KnobOption("Stressed / Avoidance", "#C4563A"),
-            SurveyUIUtils.KnobOption("Procrastinating something", "#C4973A"),
-            SurveyUIUtils.KnobOption("Habit / Automatic", "#6B3FA0"),
-            SurveyUIUtils.KnobOption("Quick break (intentional)", "#3A9E6F")
+        val intentions = listOf(
+            "Quick break (intentional)",
+            "Habit / Automatic",
+            "Bored / Nothing to do",
+            "Procrastinating something",
+            "Stressed / Avoidance"
         )
 
-        layout.addView(
-            SurveyUIUtils.createChoiceKnob(
-                this,
-                options,
-                hint = "what's pulling you in?"
-            ) { index ->
-                intendedAction = options[index].label
-                saveAndFinish()
-            }
-        )
+        val letters = listOf("A", "B", "C", "D", "E")
+        val startIndex = layout.childCount
+        intentions.forEachIndexed { i, label ->
+            val letter = letters.getOrElse(i) { "${i + 1}" }
+            layout.addView(
+                SurveyUIUtils.createMcqCard(this, label, letter) {
+                    intendedAction = label
+                    saveAndFinish()
+                }
+            )
+        }
+        SurveyUIUtils.staggerCards(layout, startIndex, intentions.size)
 
         layout.addView(SurveyUIUtils.createSkipButton(this) {
             intendedAction = ""

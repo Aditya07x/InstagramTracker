@@ -83,25 +83,30 @@ class MicroProbeActivity : Activity() {
         layout.addView(SurveyUIUtils.createSubtitle(this, "be honest — there are no wrong answers"))
 
         val affectiveOptions = listOf(
-            SurveyUIUtils.KnobOption("Refreshed / entertained", "#3A9E6F"),
-            SurveyUIUtils.KnobOption("About the same as before", "#6B3FA0"),
-            SurveyUIUtils.KnobOption("A little drained", "#C4973A"),
-            SurveyUIUtils.KnobOption("Regret I opened it", "#C4563A"),
-            SurveyUIUtils.KnobOption("Worse than before I opened it", "#A03030")
+            "Refreshed / entertained" to 5,
+            "About the same as before" to 4,
+            "A little drained" to 3,
+            "Regret I opened it" to 2,
+            "Worse than before I opened it" to 1
         )
 
-        layout.addView(
-            SurveyUIUtils.createChoiceKnob(this, affectiveOptions, hint = "one tap and we move on") { index ->
-                postSessionRating = 5 - index  // Best=5, Worst=1
-                // Derive moodAfter from affective rating for backward compat
-                moodAfter = when {
-                    postSessionRating >= 4 -> 5
-                    postSessionRating == 3 -> 3
-                    else -> 1
+        val letters = listOf("A", "B", "C", "D", "E")
+        val startIndex = layout.childCount
+        affectiveOptions.forEachIndexed { i, (label, rating) ->
+            val letter = letters.getOrElse(i) { "${i + 1}" }
+            layout.addView(
+                SurveyUIUtils.createMcqCard(this, label, letter) {
+                    postSessionRating = rating
+                    moodAfter = when {
+                        postSessionRating >= 4 -> 5
+                        postSessionRating == 3 -> 3
+                        else -> 1
+                    }
+                    showRegretPrompt()
                 }
-                showRegretPrompt()
-            }
-        )
+            )
+        }
+        SurveyUIUtils.staggerCards(layout, startIndex, affectiveOptions.size)
 
         layout.addView(SurveyUIUtils.createSkipButton(this) {
             postSessionRating = 0
@@ -141,21 +146,23 @@ class MicroProbeActivity : Activity() {
         layout.addView(SurveyUIUtils.createSubtitle(this, subtitle))
 
         val options = listOf(
-            SurveyUIUtils.KnobOption("Yes, it went as planned", "#3A9E6F"),
-            SurveyUIUtils.KnobOption("Somewhat", "#C4973A"),
-            SurveyUIUtils.KnobOption("No, it went off track", "#C4563A")
+            "Yes, it went as planned" to 1,
+            "Somewhat" to 3,
+            "No, it went off track" to 5
         )
 
-        layout.addView(
-            SurveyUIUtils.createChoiceKnob(this, options, hint = "pick the closest match") { index ->
-                regretScore = when (index) {
-                    0 -> 1
-                    1 -> 3
-                    else -> 5
+        val letters = listOf("A", "B", "C")
+        val startIndex = layout.childCount
+        options.forEachIndexed { i, (label, score) ->
+            val letter = letters.getOrElse(i) { "${i + 1}" }
+            layout.addView(
+                SurveyUIUtils.createMcqCard(this, label, letter) {
+                    regretScore = score
+                    showComparativePrompt()
                 }
-                showComparativePrompt()
-            }
-        )
+            )
+        }
+        SurveyUIUtils.staggerCards(layout, startIndex, options.size)
 
         layout.addView(SurveyUIUtils.createSkipButton(this) {
             regretScore = 0
@@ -179,21 +186,25 @@ class MicroProbeActivity : Activity() {
         layout.addView(SurveyUIUtils.createSubtitle(this, "how did this session feel overall?"))
 
         val options = listOf(
-            SurveyUIUtils.KnobOption("Intentional — I got what I came for", "#3A9E6F"),
-            SurveyUIUtils.KnobOption("Okay, nothing special", "#6B3FA0"),
-            SurveyUIUtils.KnobOption("Longer than I wanted", "#C4973A"),
-            SurveyUIUtils.KnobOption("A waste of time", "#C4563A"),
-            SurveyUIUtils.KnobOption("I could not stop — it took over", "#A03030")
+            "Intentional — I got what I came for" to 5,
+            "Okay, nothing special" to 4,
+            "Longer than I wanted" to 3,
+            "A waste of time" to 2,
+            "I could not stop — it took over" to 1
         )
 
-        layout.addView(
-            SurveyUIUtils.createChoiceKnob(this, options, hint = "choose the closest overall feel") { index ->
-                // Keep comparative scale aligned with postSessionRating:
-                // 5 = best session, 1 = worst session.
-                comparativeRating = 5 - index
-                finalizeProbe()
-            }
-        )
+        val letters = listOf("A", "B", "C", "D", "E")
+        val startIndex = layout.childCount
+        options.forEachIndexed { i, (label, rating) ->
+            val letter = letters.getOrElse(i) { "${i + 1}" }
+            layout.addView(
+                SurveyUIUtils.createMcqCard(this, label, letter) {
+                    comparativeRating = rating
+                    finalizeProbe()
+                }
+            )
+        }
+        SurveyUIUtils.staggerCards(layout, startIndex, options.size)
 
         layout.addView(SurveyUIUtils.createSkipButton(this) {
             comparativeRating = 0
